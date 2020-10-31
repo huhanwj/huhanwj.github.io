@@ -9,7 +9,7 @@ owner:
   name: Hugo/Han Hu
   avatar: bio-photo.jpg
   bio: ""
-  email: huhanwj@gmail.com/hh118@ie.cuhk.edu.hk
+  email: huhanwj@gmail.com, hh118@ie.cuhk.edu.hk
   # Do not include the @ symbol in your Twitter username
   twitter: HhggHan
   linkedin: #username
@@ -23,7 +23,7 @@ owner:
     verify:
     scholar: #id
   facebook: #username
-  instagram: #username
+  instagram: laohan_huhan
   bing-verify:
   stackoverflow: #123456/username from a "https://stackoverflow.com/users/123456/username" link
   xing: #username
@@ -35,14 +35,14 @@ owner:
   dribbble: #username
   youtube: #username
   soundcloud: #username
-  weibo: 敬文不远
+  weibo: #敬文不远
   flickr: #username
   codepen: #username
   disqus-shortname:
 
 # The following adjust the accents for your site. If you would like to further edit colors, fonts, font sizes, etc.
 # you may do so in _sass/variables.scss
-highlight-color: '#0831A5'
+highlight-color: '#0831a5'
 lowlight-color: '#000'
 
   # NOTE: If you would like your site to be licensed under a creative commons license, uncomment the 'yes' next to the type of license you wish to use.
