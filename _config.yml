@@ -1,19 +1,19 @@
 # Site wide configuration
 
 title: Site Title
-locale: en_US
+locale: zh_CN
 logo: # filename of a logo image that has been placed into your images directory
 
 # Enter the following platform usernames if you would like for them to appear on your site.
 owner:
-  name: Your Name
+  name: Hugo/Han HU
   avatar: bio-photo.jpg
-  bio: "A brief description of yourself."
-  email: #emailaddress
+  bio: ""
+  email: huhanwj@gmail.com/hh118@ie.cuhk.edu.hk
   # Do not include the @ symbol in your Twitter username
-  twitter: #username
+  twitter: HhggHan
   linkedin: #username
-  github: #username
+  github: huhanwj
   orcid: # ID Number (ex. 0000-0000-0000-0000)
   researchgate: #username
   mendeley: #username
@@ -35,14 +35,14 @@ owner:
   dribbble: #username
   youtube: #username
   soundcloud: #username
-  weibo: #username
+  weibo: 敬文不远
   flickr: #username
   codepen: #username
   disqus-shortname:
 
 # The following adjust the accents for your site. If you would like to further edit colors, fonts, font sizes, etc.
 # you may do so in _sass/variables.scss
-highlight-color: '#CC0000'
+highlight-color: '#0831A5'
 lowlight-color: '#000'
 
   # NOTE: If you would like your site to be licensed under a creative commons license, uncomment the 'yes' next to the type of license you wish to use.
