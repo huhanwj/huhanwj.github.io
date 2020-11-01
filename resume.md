@@ -1,7 +1,7 @@
 ---
 layout: resume
 ---
-A PDF version of my curriculum vitae is [here](https://github.com/huhanwj/huhanwj.github.io/blob/master/assets/files/cv.pdf).
+A PDF version of my curriculum vitae is [here](https://github.com/huhanwj/huhanwj.github.io/blob/main/assets/files/cv.pdf).
 
 ## Education
 

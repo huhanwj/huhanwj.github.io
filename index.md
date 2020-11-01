@@ -15,5 +15,3 @@ For the ongoing research project, I have merged 2 useful tools built on *ath9k* 
 
 * [RT-WIFI-CSI](https://github.com/huhanwj/RT-WIFI-CSI): Merging Atheros CSI Tool with Real Time-WiFi project
 
-[slurmmy-intro-en]: {{ site.baseurl }}/blog/slurmmy-intro-en
-
