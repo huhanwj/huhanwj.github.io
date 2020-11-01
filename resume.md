@@ -1,15 +1,13 @@
 ---
 layout: resume
 ---
+A PDF version of my curriculum vitae is [here](https://github.com/huhanwj/huhanwj.github.io/blob/master/assets/files/cv.pdf).
+
 ## Education
 
 `2017 - Present`
 __The Chinese University of Hong Kong__
 BEng. in Information Engineering, expected July, 2021
-
-cGPA: 3.612/4.0	Major GPA: 3.847/4.0
-
-* Related Courses: *Information Theory* (Postgraduate Course), Introduction to Cyber Security, Wireless Communication Systems, Image and Video Processing, Multimedia Coding & Processing, Computer Networks, Networks: Technology, Economics & Social Interactions, Information and Software Engineering Practice, Microcontrollers & Embedded System, Simulation & Statistical Analysis, Introduction to System Programming, Signals and Systems, Basic Circuits, Principles of Communication Systems, Data Structures
 
 ## Awards & Honors
 

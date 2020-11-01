@@ -3,7 +3,7 @@ layout: page
 excerpt: "About Me..."
 ---
 
-I am a fourth year undergraduate student in [Department of Information Engineering](http://www.ie.cuhk.edu.hk), [the Chinese University of Hong Kong](http://www.cuhk.edu.hk). I am expected to finish my BEng. in Information Engineering in 2021. Check my [resume](https://github.com/huhanwj/huhanwj.github.io/blob/master/assets/files/cv.pdf) for more information.
+I am a fourth year undergraduate student in [Department of Information Engineering](http://www.ie.cuhk.edu.hk), [the Chinese University of Hong Kong](http://www.cuhk.edu.hk). I am expected to finish my BEng. in Information Engineering in 2021. Check my [resume](https://huhanwj.github.io/resume/) for more information.
 
 ## Research Projects:
 
