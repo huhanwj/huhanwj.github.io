@@ -13,7 +13,7 @@ cGPA: 3.612/4.0	Major GPA: 3.847/4.0
 
 ## Awards & Honors
 
-### Academic:
+**Academic:**
 
 `2018-19`
 Scholarship for Academic Excellence 2019–20 from KY Chang Scholarship
@@ -21,7 +21,7 @@ Scholarship for Academic Excellence 2019–20 from KY Chang Scholarship
 `2019,20` 
 Dean's List, Faculty of Engineering
 
-### Extracurricular Activities:
+**Extracurricular Activities:**
 
 `2018.06`
 As student helper in several university admission seminars
@@ -45,13 +45,13 @@ Building a Contactless and Continuous Wireless Sensing System
 
 ## Professional Skills
 
-### Programming Languages:
+**Programming Languages:**
 
 * Proficient in C
 * Proficient in MATLAB
 * Familiar with Python, C++, C#
 
-### Frameworks
+**Frameworks:**
 
 * Cloud Service (AWS)
 
