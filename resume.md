@@ -1,70 +1,62 @@
 ---
 layout: resume
 ---
-## Currently
-
-Current Position Description
-
 ## Education
 
-`1990 - 1994`
-__University Name__
-Degree Awarded
+`2017 - Present`
+__The Chinese University of Hong Kong__
+BEng. in Information Engineering, expected July, 2021
 
-`1995 - 1997`
-__University Name__
-Degree Awarded 
+cGPA: 3.612/4.0	Major GPA: 3.847/4.0
 
-## Awards
+* Related Courses: *Information Theory* (Postgraduate Course), Introduction to Cyber Security, Wireless Communication Systems, Image and Video Processing, Multimedia Coding & Processing, Computer Networks, Networks: Technology, Economics & Social Interactions, Information and Software Engineering Practice, Microcontrollers & Embedded System, Simulation & Statistical Analysis, Introduction to System Programming, Signals and Systems, Basic Circuits, Principles of Communication Systems, Data Structures
 
-`2012`
-Name of Award, Organization 
+## Awards & Honors
 
-## Publications
+### Academic:
 
-<!-- A list is also available [online](https://scholar.google.co.uk/citations?user=LTOTl0YAAAAJ) -->
+`2018-19`
+Scholarship for Academic Excellence 2019–20 from KY Chang Scholarship
 
-### Journals
+`2019,20` 
+Dean's List, Faculty of Engineering
 
-`1994`
-Article Title, Journal Title
+### Extracurricular Activities:
 
-`1994`
-Article Title, Journal Title
+`2018.06`
+As student helper in several university admission seminars
 
-### Books
+`2018-19`
+As mentor in Joint College Peer Mentoring Program
 
-`1994`
-Book Title, Journal Title
+## Research Projects
 
-`1994`
-Book Title, Journal Title
+`2019.06 - 2019.09`
+Investigation of message-passing algorithms
 
+* Advisor: Prof. Pascal Vontobel, CUHK
+* Using message-passing algorithms for trajectory estimation in motion models.
 
-## Presentations
+`2020.06 - Present` 
+Building a Contactless and Continuous Wireless Sensing System
 
-`1994`
-Presentation Title, Conference, <a href="https://MyWebsite.tld/presentation1">Link to Presentation</a>
+* Advisor: Prof. He Chen, CUHK
+* Develop a comprehensive wireless sensing system which leverages the information-carrying RF signals for contactless and continuous monitoring of human vital signs
 
+## Professional Skills
 
-## Occupation
+### Programming Languages:
 
-`Current`
-__Current Job Title__, Current Employer 
+* Proficient in C
+* Proficient in MATLAB
+* Familiar with Python, C++, C#
 
-- Task
-- Task
+### Frameworks
 
-`1994-1996`
-__Current Job Title__, Current Employer 
-
-- Task
-- Task
-
-
+* Cloud Service (AWS)
 
 <!-- ### Footer
 
-Last updated: May 2013 -->
+Last updated: Nov. 1 2020 -->
 
 
