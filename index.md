@@ -7,7 +7,7 @@ I am a fourth year undergraduate student in [Department of Information Engineeri
 
 ## Research Projects:
 
-My research interest lies in Wireless sensing, AI-driven wireless communications system and View to communicate(V2C).
+My research interest lies in Wireless sensing and View to communicate(V2C).
 
 Currently, I have joined the [Wireless Internet-of-Things Systems Research Group @ Chinese University of Hong Kong (CUHK)](http://iiotc.ie.cuhk.edu.hk/) am working with Prof. He Chen on a project of developing a comprehensive wireless sensing system via Wi-Fi for monitoring human vital signs with high accuracy in complicated scenes.
 
