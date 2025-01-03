@@ -1,0 +1,33 @@
+# jemdoc: menu{MENU}{mathjax.html}, nofooter
+= Han HU  # <<-- Change this to your name
+
+~~~
+{}{img_left}{por.jpg}{Your Portrait}{240px}{160px}  # <<-- Change "your_photo.jpg" to the path of your profile photo
+PhD. Student in Information Engineering \n # <<-- Change this to your role/title
+Wireless Networking and Sensing (WiNS) Group \n# <<-- Change this to your affiliation
+The Chinese University of Hong Kong (CUHK) \n
+Email: hanhu -at- link.cuhk.edu.hk or  hh022 -at- ie.cuhk.edu.hk \n # <<-- Change this to your contact email
+GitHub:  [https://github.com/huhanwj] \n # <<-- Change "your_github_username" to your GitHub username
+~~~
+
+== About Me
+
+I am currently a PhD student in Department of Information Engineering at the Chinese University of Hong Kong (CUHK) under the supervision of [https://www.ie.cuhk.edu.hk/people/hchen.shtml/ Prof. He Chen]
+I obtained Bachelor of Engineering in Information Engineering with first class honors from the Chinese University of Hong Kong, where I had the first experience of research work
+by taking hands on a belief propagation simulation with [https://sites.google.com/site/pascalvontobel/ Prof. Pascal O. Vontobel]. # <<-- Replace this with your "About Me" paragraph
+
+== Publications
+
+-  [https://ieeexplore.ieee.org/document/10622819/ Deep Learning-Based Pulse-Shaping Filter Estimation for Fine-Grained WiFi Sensing] \n # <<-- Replace the text with your publication's title, keep the link URL
+   Han Hu, Ruiqi Kong, Ke Xu, He Henry Chen. \n # <<-- Replace with the authors of publication 1
+    ICC 2024 - IEEE International Conference on Communications, 2024. # <<-- Replace with the conference/journal info for publication 1
+
+# ''(* equal contribution)''
+
+== Course Projects
+
+- [https://github.com/SaneBow/gym-wafWAF/ Evasion Using Reinforcement Learning ] \n # <<-- Replace the text with your project's title, keep the link URL
+    Co-work with [Xianbo Wang](https://xianbo.wang/). An attempt to use reinforcement learning approach in Web Application Firewalls (WAF) evasion tasks, with an OpenAI Gym environment for WAF evasion tasks created. # <<-- Replace with brief description of project 1
+- [https://github.com/huhanwj/P2SLAM-sim/ Exploration the Application of Wireless Sensing in Robot SLAM Algorithms]  \n # <<-- Replace the text with your project's title, keep the link URL
+    An attempt to implement alogrithms proposed in [P2SLAM](https://wcsng.ucsd.edu/p2slam/) with simulated wireless data.  # <<-- Replace with brief description of project 2
+~~~
