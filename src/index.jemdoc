@@ -2,12 +2,13 @@
 = Han HU  # <<-- Change this to your name
 
 ~~~
-{}{img_left}{por.jpg}{Your Portrait}{240px}{160px}  # <<-- Change "your_photo.jpg" to the path of your profile photo
+{}{img_left}{a88888cb1e0b7ff0bbc22bb2a187db53.jpeg}{Your Portrait}{240px}{160px}  # <<-- Change "your_photo.jpg" to the path of your profile photo
 PhD. Student in Information Engineering \n # <<-- Change this to your role/title
 Wireless Networking and Sensing (WiNS) Group \n# <<-- Change this to your affiliation
 The Chinese University of Hong Kong (CUHK) \n
 Email: hanhu -at- link.cuhk.edu.hk or  hh022 -at- ie.cuhk.edu.hk \n # <<-- Change this to your contact email
 GitHub:  [https://github.com/huhanwj] \n # <<-- Change "your_github_username" to your GitHub username
+ORCID: [https://orcid.org/0009-0003-6777-0616 0009-0003-6777-0616] \n
 ~~~
 
 == About Me
