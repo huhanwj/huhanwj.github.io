@@ -18,9 +18,17 @@ by taking hands on a belief propagation simulation with [https://sites.google.co
 
 == Publications
 
--  [https://ieeexplore.ieee.org/document/10622819/ Deep Learning-Based Pulse-Shaping Filter Estimation for Fine-Grained WiFi Sensing] \n # <<-- Replace the text with your publication's title, keep the link URL
-   Han Hu, Ruiqi Kong, Ke Xu, He Henry Chen. \n # <<-- Replace with the authors of publication 1
-    ICC 2024 - IEEE International Conference on Communications, 2024. # <<-- Replace with the conference/journal info for publication 1
+- [https://doi.org/10.1145/3776734.3794390 Can Vision Language Models Zero-Shot Thermal Images for Private and Robust Human Robot Interaction?] \n
+   Han Hu, He Chen. \n
+   Companion Proceedings of the 21st ACM/IEEE International Conference on Human-Robot Interaction (HRI Companion), 2026.
+
+- [https://openreview.net/forum?id=yK7gkeuCcb TeleAgent: Agent-Based Network Status Dialogue and Autonomous Recovery for Telepresence Human-Robot Interaction] \n
+   Han Hu, Qijia Wang, He Chen. \n
+   Workshop on Human-aware Embodied AI (HEAI)-IROS 25.
+
+- [https://ieeexplore.ieee.org/document/10622819/ Deep Learning-Based Pulse-Shaping Filter Estimation for Fine-Grained WiFi Sensing] \n
+   Han Hu, Ruiqi Kong, Ke Xu, He Chen. \n
+   ICC 2024 - IEEE International Conference on Communications, 2024.
 
 # ''(* equal contribution)''
 
