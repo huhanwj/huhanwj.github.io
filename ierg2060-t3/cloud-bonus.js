@@ -30,7 +30,7 @@ export function setupCloudBonus({container, call, endpoint, getAbsent, getStuden
   const parseNo = value => /^\d+$/.test(String(value).trim()) && Number.isSafeInteger(Number(value)) && Number(value) > 0 ? Number(value) : null;
   function render() {
     if (disposed) return;
-    const locked = busy || !!pending;
+    const locked = !!pending;
     $('.bonus-count').textContent = `${entrants().length} registered`;
     $('[data-action="open"]').disabled = locked || !!room?.open || (!!room && !room.winner && !!entrants().length);
     $('[data-action="close"]').disabled = locked || !room?.open;
@@ -78,7 +78,7 @@ export function setupCloudBonus({container, call, endpoint, getAbsent, getStuden
   function shouldPoll() { return !disposed && !document.hidden && (!dialog || dialog.open || room?.open); }
   function schedule() {
     clearTimeout(timer);
-    if (shouldPoll()) timer = setTimeout(() => { refresh().catch(() => {}); }, 5000);
+    if (shouldPoll() && !pending) timer = setTimeout(() => { refresh().catch(() => {}); }, 5000);
   }
   async function apply(result) {
     if (disposed) return;
@@ -143,8 +143,11 @@ export function setupCloudBonus({container, call, endpoint, getAbsent, getStuden
     if (completed && operation.action === 'bonusJoin') await refresh().catch(() => {});
     return completed;
   }
-  function mutate(action, payload) {
-    if (disposed || busy || pending) return Promise.resolve(false);
+  async function mutate(action, payload) {
+    if (disposed || pending) return false;
+    // A background status refresh must not swallow an instructor click.
+    if (active) await active.catch(() => {});
+    if (disposed || pending) return false;
     pending = {action, payload: {...payload, requestId: crypto.randomUUID()}};
     return sendPending();
   }

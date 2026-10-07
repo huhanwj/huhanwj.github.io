@@ -1,6 +1,6 @@
 import {fromSheet, validateState, migrateState, mergeRoster, round, eligible, parseAbsent, drawBatch} from './core.js?v=6';
 import {setupBonus} from './bonus.js?v=6';
-import {setupCloudBonus} from './cloud-bonus.js?v=6';
+import {setupCloudBonus} from './cloud-bonus.js?v=8';
 import {createCloudClient, cloudEndpoint} from './cloud.js?v=7';
 import {cloudDefaults} from './cloud-config.js?v=7';
 
