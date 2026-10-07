@@ -1,4 +1,5 @@
-// Only class numbers, completed turns and draw history belong in public-page state.
+// State retains class numbers, optional names, completed turns and draw history.
+// Student IDs and numeric scores are never retained.
 export function parseCSV(text) {
   const rows = []; let row = [], field = '', quoted = false;
   text = text.replace(/^\uFEFF/, '');
@@ -31,10 +32,14 @@ export function fromSheet(text) {
     return i;
   };
   const noCol = col('No.'), classCol = col('TutorialClass'), qCols = [col('Question1'), col('Question2')];
+  const nameColumns = rows[header].map((value, index) => value.trim() === 'Name' ? index : -1).filter(index => index >= 0);
+  if (nameColumns.length > 1) throw Error('重复 Name 列。');
+  const nameCol = nameColumns[0];
   const students = rows.slice(header + 1)
     .filter(r => /^\d+$/.test((r[noCol] || '').trim()) && r[classCol]?.trim() === 'Tutorial 3')
     .map(r => ({
       no: Number(r[noCol]),
+      name: nameCol === undefined ? '' : r[nameCol] || '',
       q: qCols.map(i => {
         const cell = (r[i] || '').trim();
         if (!cell) return false;
@@ -62,11 +67,17 @@ function token(value, message) {
   return value;
 }
 
+function studentName(value) {
+  if (value === undefined) return '';
+  if (typeof value !== 'string' || value.length > 200 || /[\u0000-\u0008\u000e-\u001f\u007f]/.test(value)) throw Error('学生姓名无效。');
+  return value.trim().replace(/\s+/g, ' ');
+}
+
 export function validateState(s) {
   if (!s || s.version !== 2 || !Array.isArray(s.students) || !s.students.length || s.students.length > 500) throw Error('备份格式无效。');
   const students = s.students.map(p => {
     if (!p || !Number.isSafeInteger(p.no) || p.no < 1 || !Array.isArray(p.q) || p.q.length !== 2 || [...p.q].some(q => typeof q !== 'boolean')) throw Error('编号或抽签进度无效。');
-    return { no: p.no, q: [...p.q] };
+    return { no: p.no, name: studentName(p.name), q: [...p.q] };
   }).sort((a, b) => a.no - b.no);
   const known = new Set(students.map(p => p.no));
   if (known.size !== students.length) throw Error('编号重复。');
@@ -107,12 +118,26 @@ export function validateState(s) {
   return { version: 2, students, absent, batches, bonus };
 }
 
+export function mergeRoster(s, roster) {
+  const state = validateState(s);
+  const entries = Array.isArray(roster) ? roster : roster?.students;
+  if (!Array.isArray(entries) || entries.length !== state.students.length) throw Error('导入名单的编号必须与当前名单完全一致。');
+  const names = new Map();
+  for (const entry of entries) {
+    if (!entry || !Number.isSafeInteger(entry.no) || entry.no < 1 || names.has(entry.no)) throw Error('导入名单包含无效或重复编号。');
+    names.set(entry.no, studentName(entry.name));
+  }
+  if (state.students.some(student => !names.has(student.no))) throw Error('导入名单的编号必须与当前名单完全一致。');
+  state.students = state.students.map(student => ({ ...student, name: names.get(student.no) }));
+  return validateState(state);
+}
+
 export function migrateState(old) {
   if (old?.version === 2) return validateState(old);
   if (!old || old.version !== 1 || !Array.isArray(old.students)) throw Error('备份格式无效。');
   const students = old.students.map(p => {
     if (!p || !Array.isArray(p.q) || p.q.length !== 2 || [...p.q].some(q => q !== null && (typeof q !== 'object' || Array.isArray(q)))) throw Error('旧版学生记录无效。');
-    return { no: p.no, q: p.q.map(q => q !== null) };
+    return { no: p.no, name: studentName(p.name), q: p.q.map(q => q !== null) };
   });
   const state = validateState({ version: 2, students, absent: old.absent, batches: [], bonus: [] });
   if (old.pending != null) {

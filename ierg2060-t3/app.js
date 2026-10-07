@@ -1,107 +1,105 @@
-import {fromSheet, validateState, migrateState, round, eligible, parseAbsent, drawBatch} from './core.js?v=2';
-import {setupBonus} from './bonus.js?v=2';
+import {fromSheet, validateState, migrateState, mergeRoster, round, eligible, parseAbsent, drawBatch} from './core.js?v=6';
+import {setupBonus} from './bonus.js?v=6';
+import {setupCloudBonus} from './cloud-bonus.js?v=6';
+import {createCloudClient} from './cloud.js?v=6';
 
-const KEY = 'ierg2060-t3-v2', OLD_KEY = 'ierg2060-t3-v1';
-const $ = id => document.getElementById(id);
-let state = null, incoming = null, bonus = null, writable = false;
-function notice(text, error = false) {
-  $('notice').textContent = text; $('notice').classList.toggle('error', error); $('notice').hidden = !text;
-  if ($('settings-dialog').open) $('settings-status').textContent = text;
+const KEY='ierg2060-t3-v2', OLD_KEY='ierg2060-t3-v1', CLOUD='ierg2060-t3-cloud', SECRET='ierg2060-t3-cloud-key', PENDING='ierg2060-t3-pending';
+const $=id=>document.getElementById(id);
+let state=null,incoming=null,bonus=null,writable=false,busy=false,cooldown=false,cloud=null,endpoint='',adminKey='',revision=0,connected=false,pending=null,initial=null;
+function notice(text,error=false){$('notice').textContent=text;$('notice').classList.toggle('error',error);$('notice').hidden=!text;if($('settings-dialog').open)$('settings-status').textContent=text;}
+function handle(fn){return async event=>{event?.preventDefault();try{await fn(event);}catch(error){notice(error.message,true);}finally{controls();}};}
+function cache(next){const clean=validateState(next);localStorage.setItem(KEY,JSON.stringify(clean));state=clean;}
+function studentName(no){return state?.students.find(p=>p.no===no)?.name||'';}
+function cloudState(result){if(result.revision<revision)return;cache(result.state);revision=result.revision;render();$('cloud-status').textContent='Saved in Google Sheets.';}
+async function call(action,payload={}){if(!cloud||!connected)throw Error('Connect Google Sheets in Draw settings.');return cloud.call(action,{...payload,adminKey});}
+async function flushPending(){
+  if(!pending)return;
+  let result;try{result=await call(pending.action||'save',pending);}catch(error){if(error.serverConfirmed&&/Cloud progress changed|already initialized/.test(error.message)){const latest=await call('load');if(latest.state){cloudState(latest);localStorage.removeItem(PENDING);pending=null;}throw Error('Cloud progress changed. The latest saved results are now loaded; this new draw was not saved.');}throw error;}
+  cloudState(result);localStorage.removeItem(PENDING);pending=null;
 }
-function handle(fn) { return async event => {event?.preventDefault();try {await fn(event);}catch(error){notice(error.message,true);}}; }
-function save(next) {
-  if (!writable) throw Error('Close the other draw page, then reload this one.');
-  const clean = validateState(next);
-  localStorage.setItem(KEY, JSON.stringify(clean)); state = clean;
+async function save(next,action='save'){
+  if(!writable)throw Error('Close the other draw page, then reload this one.');
+  if(pending)throw Error('Retry the pending save in Draw settings before continuing.');
+  const clean=validateState(next);
+  if(!endpoint){cache(clean);return;}
+  if(!connected||initial)throw Error('Finish connecting Google Sheets in Draw settings.');
+  pending={action,state:clean,revision,requestId:crypto.randomUUID()};
+  localStorage.setItem(PENDING,JSON.stringify(pending));
+  try{await flushPending();}catch(error){$('cloud-status').textContent='Save not confirmed. Retry saving before continuing.';throw error;}
 }
-function count() {
-  const n = Number($('count').value);
-  if (!Number.isInteger(n) || n < 1 || n > (state?.students.length || 35)) throw Error('Choose a whole number from 1 to the class size.');
-  return n;
-}
-function previewResults(numbers = []) {
-  const results=$('results');results.replaceChildren();
-  if(!numbers.length)return;
+function count(){const n=Number($('count').value);if(!Number.isInteger(n)||n<1||n>(state?.students.length||35))throw Error('Choose a whole number from 1 to the class size.');return n;}
+function previewResults(numbers=[]){
+  const results=$('results');results.replaceChildren();if(!numbers.length)return;
   const list=document.createElement('ol');list.className='draw-results';
-  numbers.forEach((no,i)=>{
-    const item=document.createElement('li');
-    const q=document.createElement('span');q.className='result-q';q.textContent=`QUESTION ${i+1}`;
-    const n=document.createElement('strong');n.className='result-no';n.textContent=String(no).padStart(2,'0');
-    item.append(q,n);list.append(item);
-  });
-  results.append(list);
+  numbers.forEach((no,i)=>{const item=document.createElement('li'),q=document.createElement('span'),n=document.createElement('strong'),name=document.createElement('span');q.className='result-q';q.textContent=`QUESTION ${i+1}`;n.className='result-no';n.textContent=String(no).padStart(2,'0');name.className='result-name';name.textContent=studentName(no);item.append(q,n);if(name.textContent)item.append(name);list.append(item);});results.append(list);
 }
-function absentInput() {
-  try {
-    const absent=parseAbsent($('absent').value,state?.students||[]);
-    $('absence-form').classList.remove('invalid');$('absent').removeAttribute('aria-invalid');
-    $('absence-help').textContent='No. separated by commas · no spaces · leave empty if none';return absent;
-  } catch(error) {
-    $('absence-form').classList.add('invalid');$('absent').setAttribute('aria-invalid','true');
-    $('absence-help').textContent=error.message;return null;
-  }
-}
-function controls() {
+function absentInput(){try{const absent=parseAbsent($('absent').value,state?.students||[]);$('absence-form').classList.remove('invalid');$('absent').removeAttribute('aria-invalid');$('absence-help').textContent='No. separated by commas · no spaces · leave empty if none';return absent;}catch(error){$('absence-form').classList.add('invalid');$('absent').setAttribute('aria-invalid','true');$('absence-help').textContent=error.message;return null;}}
+function controls(){
   const absent=absentInput(),q=state?round(state):0,pool=state&&absent?eligible({...state,absent}):[];
-  let n=0;try{n=count();}catch{/* Invalid input disables the draw. */}
-  $('draw').disabled=!writable||!state||!pool.length||!n||absent===null;
-  $('draw-label').textContent=`Draw ${Math.min(n||6,pool.length||n||6)} students`;
+  let n=0;try{n=count();}catch{}
+  const locked=busy||!!pending||!!initial||!!endpoint&&!connected||!writable;
+  $('draw').disabled=locked||cooldown||!state||!pool.length||!n||absent===null;
+  $('draw-label').textContent=busy?'Saving…':`Draw ${Math.min(n||6,pool.length||n||6)} students`;
   $('pool-count').replaceChildren(document.createTextNode(`${pool.length} `));const small=document.createElement('small');small.textContent='available';$('pool-count').append(small);
   $('next-round').textContent=q===2?'BOTH ROUNDS DRAWN':'ELIGIBLE STUDENTS';
-  document.querySelectorAll('[data-count]').forEach(button=>{const active=Number(button.dataset.count)===n;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));});
-  $('backup').disabled=!state;
-  $('bonus-open').disabled=!state||!writable||absent===null;
+  document.querySelectorAll('[data-count]').forEach(button=>{const active=Number(button.dataset.count)===n;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));button.disabled=locked;});
+  $('count').disabled=locked;$('absent').disabled=locked;$('backup').disabled=!state;$('bonus-open').disabled=locked||!state||absent===null;
+  $('choose-file').disabled=locked||!!endpoint;$('confirm-import').disabled=locked||!!endpoint;
+  $('sheet-form').querySelector('button').disabled=locked||!!endpoint;
+  $('cloud-form').querySelector('button').disabled=busy||!writable;
+  $('cloud-refresh').hidden=!connected;$('cloud-refresh').disabled=busy;
+  $('cloud-names').hidden=!connected;$('cloud-names').disabled=locked;
+  $('cloud-retry').hidden=!pending;$('cloud-retry').disabled=busy||!connected;
+  $('cloud-initialize').hidden=!initial;$('cloud-initialize').disabled=busy||!connected;
 }
-function render() {
-  const batch=state?.batches.at(-1);$('count').max=state?.students.length||35;$('absent').value=(state?.absent||[]).join(',');
-  $('round-label').textContent='THIS DRAW';
-  $('deck-caption').textContent=batch?`${batch.numbers.length} students selected`:'';
-  previewResults(batch?.numbers);controls();
-  if(!state)notice('Import your class records in Draw settings to begin.');
-  else if(round(state)===2)notice('Both participation rounds are complete.');
-  else if(!eligible(state).length)notice('The remaining students in this round are absent. This round stays open.');
-}
-$('draw').onclick=handle(()=>{
-  const absent=absentInput();if(absent===null)return;
-  // Persist the whole batch before showing it. Reload never triggers another draw.
-  save(drawBatch({...state,absent},count()));const batch=state.batches.at(-1);
-  notice('');$('round-label').textContent='THIS DRAW';previewResults(batch.numbers);
-  $('deck-caption').textContent=`${batch.numbers.length} students selected`;
-  $('announcement').textContent=batch.numbers.map((no,i)=>`Question ${i+1}: student ${no}`).join('. ');controls();
-  if(round(state)===2)notice('Both participation rounds are complete.');
-  else if(!eligible(state).length)notice('The remaining students in this round are absent. This round stays open.');
+function render(){const batch=state?.batches.at(-1);$('count').max=state?.students.length||35;$('absent').value=(state?.absent||[]).join(',');$('round-label').textContent='THIS DRAW';$('deck-caption').textContent=batch?`${batch.numbers.length} students selected`:'';previewResults(batch?.numbers);controls();if(!state)notice('Import your class records or connect Google Sheets in Draw settings.');else if(round(state)===2)notice('Both participation rounds are complete.');else if(!eligible(state).length)notice('The remaining students in this round are absent. This round stays open.');}
+async function exclusive(fn){if(busy)return;busy=true;controls();try{return await fn();}finally{busy=false;controls();}}
+$('draw').onclick=handle(async()=>{
+  if(busy||cooldown||pending||$('draw').disabled)return;
+  cooldown=true;setTimeout(()=>{cooldown=false;controls();},1500);
+  await exclusive(async()=>{const absent=absentInput();if(absent===null)return;await save(drawBatch({...state,absent},count()));notice('');render();const batch=state.batches.at(-1);$('announcement').textContent=batch.numbers.map((no,i)=>`Question ${i+1}: No. ${no} ${studentName(no)}`).join('. ');});
 });
-document.querySelectorAll('[data-count]').forEach(button=>button.onclick=()=>{$('count').value=button.dataset.count;if(!state?.batches.length)previewResults();controls();});
-$('count').oninput=()=>{if(!state?.batches.length&&Number($('count').value)>0)previewResults();controls();};
-$('absent').oninput=controls;
-const saveAbsence=()=>{const absent=absentInput();if(absent!==null&&state)save({...state,absent});controls();};
+document.querySelectorAll('[data-count]').forEach(button=>button.onclick=()=>{$('count').value=button.dataset.count;controls();});$('count').oninput=controls;$('absent').oninput=controls;
+const saveAbsence=()=>exclusive(async()=>{const absent=absentInput();if(absent!==null&&state&&JSON.stringify(absent)!==JSON.stringify(state.absent))await save({...state,absent});});
 $('absent').onchange=handle(saveAbsence);$('absence-form').onsubmit=handle(saveAbsence);
-$('settings-open').onclick=()=>$('settings-dialog').showModal();$('bonus-open').onclick=()=>$('bonus-dialog').showModal();
+$('settings-open').onclick=()=>$('settings-dialog').showModal();$('bonus-open').onclick=handle(async()=>{$('bonus-dialog').showModal();await bonus?.refresh?.();});
 document.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>$(button.dataset.close).close());
-function preview(next) {
-  if(bonus?.isOpen()||bonus?.hasUnsavedResult())throw Error('Close Bonus registration and save its result before importing.');
-  incoming=migrateState(next);$('import-summary').textContent=`${incoming.students.length} roster numbers. Previous turns imported. This replaces the draw progress in this browser.`;$('import-preview').hidden=false;
-}
-$('choose-file').onclick=()=>$('import-file').click();
-$('import-file').onchange=handle(async event=>{const file=event.target.files[0];if(!file)return;try{const text=await file.text();preview(file.name.toLowerCase().endsWith('.json')?JSON.parse(text):fromSheet(text));}finally{event.target.value='';}});
+function preview(next){if(endpoint)throw Error('Cloud progress is active. Use Refresh names to update the roster without replacing turns.');if(bonus?.isOpen()||bonus?.hasUnsavedResult()||bonus?.getEntrants().length)throw Error('Finish the Bonus round before importing.');incoming=migrateState(next);$('import-summary').textContent=`${incoming.students.length} students, including names when available. This replaces the draw progress in this browser.`;$('import-preview').hidden=false;}
+$('choose-file').onclick=()=>$('import-file').click();$('import-file').onchange=handle(async event=>{const file=event.target.files[0];if(!file)return;try{const text=await file.text();preview(file.name.toLowerCase().endsWith('.json')?JSON.parse(text):fromSheet(text));}finally{event.target.value='';}});
 $('cancel-import').onclick=()=>{incoming=null;$('import-preview').hidden=true;};
-$('confirm-import').onclick=handle(()=>{if(!incoming)return;if(bonus&&!bonus.reset())throw Error('Save the Bonus result first.');save(incoming);incoming=null;$('import-preview').hidden=true;$('settings-dialog').close();notice('');render();});
-$('backup').onclick=handle(()=>{if(!state)return;const url=URL.createObjectURL(new Blob([JSON.stringify(state,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download=`IERG2060-T3-draw-${new Date().toISOString().slice(0,10)}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});
-$('sheet-form').onsubmit=handle(async()=>{
-  const url=new URL($('sheet-url').value),match=url.pathname.match(/^\/spreadsheets\/d\/([\w-]+)/),gid=url.searchParams.get('gid')||new URLSearchParams(url.hash.slice(1)).get('gid');
-  if(url.hostname!=='docs.google.com'||!match||!gid||!/^\d+$/.test(gid))throw Error('Paste the Tutorial 3 worksheet link including its gid.');
-  $('settings-status').textContent='Reading roster…';
-  const response=await fetch(`https://docs.google.com/spreadsheets/d/${match[1]}/export?format=csv&gid=${gid}`,{credentials:'omit',signal:AbortSignal.timeout(20000)});
-  if(!response.ok)throw Error('Could not read the worksheet. Import its CSV instead.');preview(fromSheet(await response.text()));$('settings-status').textContent='Roster ready to import.';
-});
-async function activate() {
-  writable=true;let restoreError='';
-  try{const saved=localStorage.getItem(KEY),legacy=localStorage.getItem(OLD_KEY);if(saved||legacy){save(migrateState(JSON.parse(saved||legacy)));localStorage.removeItem(OLD_KEY);}}
-  catch(error){restoreError=`Could not restore draw progress: ${error.message}`;}
-  bonus=setupBonus({container:$('bonus-container'),getEligibleNumbers:()=>state?state.students.filter(p=>!state.absent.includes(p.no)).map(p=>p.no):[],onWinner:result=>{if(!state.bonus.some(b=>b.round===result.round))save({...state,bonus:[...state.bonus,result]});},publicBaseUrl:new URL('./',location.href).href});
-  if(state)notice('');render();if(restoreError)notice(restoreError,true);
+$('confirm-import').onclick=handle(()=>exclusive(async()=>{if(!incoming)return;if(bonus&&!await bonus.reset())throw Error('Save the Bonus result first.');await save(incoming);incoming=null;$('import-preview').hidden=true;$('settings-dialog').close();notice('');render();}));
+$('backup').onclick=handle(()=>{if(!state)return;const url=URL.createObjectURL(new Blob([JSON.stringify(state,null,2)],{type:'application/json'})),a=document.createElement('a');a.href=url;a.download=`IERG2060-T3-draw-${new Date().toISOString().slice(0,10)}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});
+$('sheet-form').onsubmit=handle(async()=>{const url=new URL($('sheet-url').value),match=url.pathname.match(/^\/spreadsheets\/d\/([\w-]+)/),gid=url.searchParams.get('gid')||new URLSearchParams(url.hash.slice(1)).get('gid');if(url.hostname!=='docs.google.com'||!match||!gid||!/^\d+$/.test(gid))throw Error('Paste the Tutorial 3 worksheet link including its gid.');$('settings-status').textContent='Reading roster…';const response=await fetch(`https://docs.google.com/spreadsheets/d/${match[1]}/export?format=csv&gid=${gid}`,{credentials:'omit',signal:AbortSignal.timeout(20000)});if(!response.ok)throw Error('Could not read the worksheet. Import its CSV instead.');preview(fromSheet(await response.text()));$('settings-status').textContent='Roster ready to import.';});
+function installBonus(){
+  bonus?.destroy?.();
+  if(endpoint&&connected)bonus=setupCloudBonus({container:$('bonus-container'),call,endpoint,getAbsent:()=>{const absent=absentInput();if(absent===null)throw Error('Check the absent numbers first.');return absent;},getStudentName:studentName,onState:cloudState,publicBaseUrl:new URL('./',location.href).href});
+  else if(!endpoint)bonus=setupBonus({container:$('bonus-container'),getStudentName:studentName,getEligibleNumbers:()=>state?state.students.filter(p=>!state.absent.includes(p.no)).map(p=>p.no):[],onWinner:result=>exclusive(()=>!state.bonus.some(b=>b.round===result.round)?save({...state,bonus:[...state.bonus,result]}):undefined),publicBaseUrl:new URL('./',location.href).href});
+}
+async function loadCloud(){
+  const result=await call('load');if(result.revision<revision)return;
+  if(result.state){initial=null;cloudState(result);if(pending){const ids=new Set(state.batches.map(b=>b.id));if(pending.state.batches.every(b=>ids.has(b.id))&&JSON.stringify(pending.state.absent)===JSON.stringify(state.absent)){localStorage.removeItem(PENDING);pending=null;}}}
+  else{revision=result.revision;initial=state?mergeRoster(state,result.roster):validateState({version:2,students:result.roster,absent:[],batches:[],bonus:[]});$('cloud-status').textContent=`Cloud has no records yet. Start with ${initial.students.length} students and ${initial.batches.length} saved batches from this browser${state?'':' / the source sheet'}.`;}
+}
+$('cloud-form').onsubmit=handle(()=>exclusive(async()=>{
+  if(bonus?.isOpen()||bonus?.hasUnsavedResult()||(!endpoint&&bonus?.getEntrants().length))throw Error('Finish the Bonus round before connecting.');
+  const proposed=createCloudClient($('cloud-url').value.trim()),key=$('cloud-key').value.trim();
+  if(!key){proposed.destroy();throw Error('Enter the TA access key.');}
+  if(endpoint&&proposed.endpoint!==endpoint){proposed.destroy();throw Error('This browser is already linked to a different cloud. Use a separate browser profile for another class.');}
+  try{await proposed.call('load',{adminKey:key});}catch(error){proposed.destroy();throw error;}
+  cloud?.destroy();cloud=proposed;endpoint=cloud.endpoint;adminKey=key;connected=true;
+  localStorage.setItem(CLOUD,endpoint);sessionStorage.setItem(SECRET,adminKey);$('cloud-key').value='';
+  await loadCloud();installBonus();await bonus?.refresh?.();notice('');
+}));
+$('cloud-initialize').onclick=handle(()=>exclusive(async()=>{if(!initial)return;const next=initial;initial=null;try{await save(next,'initialize');}catch(error){throw error;}installBonus();notice('');render();}));
+$('cloud-retry').onclick=handle(()=>exclusive(async()=>{await flushPending();notice('');render();}));
+$('cloud-refresh').onclick=handle(()=>exclusive(async()=>{await loadCloud();await bonus?.refresh?.();notice(pending?'A save still needs confirmation. Use Retry saving.':'');}));
+$('cloud-names').onclick=handle(()=>exclusive(async()=>{const result=await call('names');await save(mergeRoster(state,result.roster));notice('Names updated.');render();}));
+async function activate(){
+  writable=true;
+  try{const saved=localStorage.getItem(KEY),legacy=localStorage.getItem(OLD_KEY);if(saved||legacy){cache(migrateState(JSON.parse(saved||legacy)));localStorage.removeItem(OLD_KEY);}endpoint=localStorage.getItem(CLOUD)||'';adminKey=sessionStorage.getItem(SECRET)||'';pending=JSON.parse(localStorage.getItem(PENDING)||'null');if(pending)pending.state=validateState(pending.state);$('cloud-url').value=endpoint;
+    if(endpoint){$('cloud-status').textContent='Connect Google Sheets to resume.';if(adminKey){cloud=createCloudClient(endpoint);connected=true;await loadCloud();installBonus();await bonus?.refresh?.();}else notice('Enter the TA access key in Draw settings to resume Google Sheets.');}else installBonus();render();
+  }catch(error){if(endpoint)connected=false;notice(`Could not restore draw progress: ${error.message}`,true);controls();}
 }
 render();
-if(navigator.locks)navigator.locks.request(OLD_KEY,{ifAvailable:true},async lock=>{if(!lock){notice('Close the other draw page, then reload this one.',true);return;}await activate();await new Promise(()=>{});}).catch(error=>notice(error.message,true));
-else notice('Use a current version of Chrome, Safari or Firefox to save your draw.',true);
-window.addEventListener('beforeunload',event=>{if(bonus?.isOpen()||bonus?.hasUnsavedResult()){event.preventDefault();event.returnValue='';}});
+if(navigator.locks)navigator.locks.request(OLD_KEY,{ifAvailable:true},async lock=>{if(!lock){notice('Close the other draw page, then reload this one.',true);return;}await activate();await new Promise(()=>{});}).catch(error=>notice(error.message,true));else notice('Use a current browser to save your draw.',true);
+window.addEventListener('beforeunload',event=>{if(pending||(!endpoint&&(bonus?.isOpen()||bonus?.hasUnsavedResult()||bonus?.getEntrants().length))){event.preventDefault();event.returnValue='';}});

@@ -1,5 +1,5 @@
 // Only roster numbers cross the data channel. Names stay on the host.
-export function setupBonus({ container, getEligibleNumbers, onWinner, publicBaseUrl }) {
+export function setupBonus({ container, getEligibleNumbers, getStudentName, onWinner, publicBaseUrl }) {
   if (!container || typeof getEligibleNumbers !== 'function') throw new Error('Bonus draw needs a container and eligible-number provider.');
   let peer = null;
   let round = null;
@@ -179,7 +179,8 @@ export function setupBonus({ container, getEligibleNumbers, onWinner, publicBase
     drawn = true;
     stopNetwork('This bonus round has ended.');
     status.textContent = `Round complete · ${pool.length} ${pool.length === 1 ? 'entry' : 'entries'}${removed ? ` · ${removed} ineligible ${removed === 1 ? 'entry was' : 'entries were'} removed` : ''}`;
-    $('.bonus-winner').textContent = `Selected volunteer · No. ${no}`;
+    const name = getStudentName?.(no) || '';
+    $('.bonus-winner').textContent = `Selected volunteer · No. ${no}${name ? ` · ${name}` : ''}`;
     pendingRecord = { no, round, entrants: pool, drawnAt: new Date().toISOString() };
     saveResult();
   }
