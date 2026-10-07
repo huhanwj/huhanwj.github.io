@@ -46,7 +46,7 @@ function controls() {
   let n=0;try{n=count();}catch{/* Invalid input disables the draw. */}
   $('draw').disabled=!writable||!state||!pool.length||!n||absent===null||animating;
   $('draw-label').textContent=animating?'Revealing…':`Draw ${Math.min(n||6,pool.length||n||6)} cards`;
-  $('pool-count').replaceChildren(document.createTextNode(`${pool.length} `));const small=document.createElement('small');small.textContent='in the deck';$('pool-count').append(small);
+  $('pool-count').replaceChildren(document.createTextNode(`${pool.length} `));const small=document.createElement('small');small.textContent='available';$('pool-count').append(small);
   $('next-round').textContent=q===2?'BOTH ROUNDS DRAWN':'ELIGIBLE STUDENTS';
   document.querySelectorAll('[data-count]').forEach(button=>{const active=Number(button.dataset.count)===n;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));button.disabled=animating;});
   $('count').disabled=animating;$('absent').disabled=animating;$('backup').disabled=!state;
@@ -55,21 +55,21 @@ function controls() {
 function render() {
   const batch=state?.batches.at(-1);$('count').max=state?.students.length||35;$('absent').value=(state?.absent||[]).join(',');
   $('round-label').textContent='THIS DRAW';
-  $('deck-caption').textContent=batch?'The floor is yours. Let’s hear your thinking.':'Your next speakers are in the cards.';
+  $('deck-caption').textContent=batch?`${batch.numbers.length} students selected`:'';
   previewCards(batch?.numbers);controls();
   if(!state)notice('Import your class records in Draw settings to begin.');
-  else if(round(state)===2)notice('Everyone has been drawn twice. There’s always a Bonus round.');
+  else if(round(state)===2)notice('Both participation rounds are complete.');
   else if(!eligible(state).length)notice('The remaining students in this round are absent. This round stays open.');
 }
 $('draw').onclick=handle(async()=>{
   if(animating)return;const absent=absentInput();if(absent===null)return;
   // Persist the whole batch before revealing. Reload never triggers another draw.
   save(drawBatch({...state,absent},count()));const batch=state.batches.at(-1);
-  notice('');animating=true;controls();$('round-label').textContent='THIS DRAW';$('deck-caption').textContent='A little suspense…';
+  notice('');animating=true;controls();$('round-label').textContent='THIS DRAW';$('deck-caption').textContent='Drawing…';
   previewCards(batch.numbers,true);
   await new Promise(resolve=>setTimeout(resolve,motion.matches?30:1400+Math.min(batch.numbers.length-1,20)*130));
-  animating=false;$('deck-caption').textContent='The floor is yours. Let’s hear your thinking.';$('announcement').textContent=batch.numbers.map((no,i)=>`Question ${i+1}: student ${no}`).join('. ');controls();
-  if(round(state)===2)notice('Everyone has been drawn twice. There’s always a Bonus round.');
+  animating=false;$('deck-caption').textContent=`${batch.numbers.length} students selected`;$('announcement').textContent=batch.numbers.map((no,i)=>`Question ${i+1}: student ${no}`).join('. ');controls();
+  if(round(state)===2)notice('Both participation rounds are complete.');
   else if(!eligible(state).length)notice('The remaining students in this round are absent. This round stays open.');
 });
 document.querySelectorAll('[data-count]').forEach(button=>button.onclick=()=>{$('count').value=button.dataset.count;if(!state?.batches.length)previewCards();controls();});

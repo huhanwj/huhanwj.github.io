@@ -78,7 +78,7 @@
         if (data.status === 'joined' && Number.isSafeInteger(data.no) && data.no > 0) {
           accepted = true;
           acceptedNo = data.no;
-          show(`You’re registered as No. ${data.no}. You can now close this page. Good luck!`, 'success');
+          show(`You’re registered as No. ${data.no}. You can now close this page.`, 'success');
           retry.hidden = true;
         } else show(String(data.message || 'Registration could not be accepted. Please check with your instructor.'), 'error');
         controls();

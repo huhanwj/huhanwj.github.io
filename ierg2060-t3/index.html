@@ -1,25 +1,23 @@
 <!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex,nofollow,noarchive"><meta name="referrer" content="no-referrer"><meta name="theme-color" content="#100e21">
-<title>The Draw · IERG2060</title><link rel="stylesheet" href="style.css?v=2"><script defer src="vendor/peerjs.min.js"></script><script defer src="vendor/qrcode.js"></script><script type="module" src="app.js?v=3"></script>
+<title>IERG2060 · Tutorial 3</title><link rel="stylesheet" href="style.css?v=3"><script defer src="vendor/peerjs.min.js"></script><script defer src="vendor/qrcode.js"></script><script type="module" src="app.js?v=4"></script>
 </head><body>
 <div class="ambient ambient-one" aria-hidden="true"></div><div class="ambient ambient-two" aria-hidden="true"></div>
 <div class="shell">
 <header><a class="wordmark" href="./"><span class="brand-star" aria-hidden="true">✦</span> IERG<span>2060</span></a><div class="header-actions"><span class="tutorial">TUTORIAL 03</span><button id="bonus-open" class="pill">✧ &nbsp; Bonus round</button><button id="settings-open" class="icon-button" aria-label="Draw settings">⚙</button></div></header>
 <main>
-<section class="hero"><p class="eyebrow"><span class="status-dot"></span> A CHANCE TO SHARE YOUR THINKING</p><h1>The floor is <em>yours.</em></h1><p class="subtitle">A little luck. A lot of thinking.</p></section>
 <section class="draw-table" aria-label="Card draw">
-<div class="table-heading"><span id="round-label" class="round-label">THIS DRAW</span><span id="deck-caption">Your next speakers are in the cards.</span><span class="table-star" aria-hidden="true">✦</span></div>
+<div class="table-heading"><span id="round-label" class="round-label">THIS DRAW</span><span id="deck-caption"></span><span class="table-star" aria-hidden="true">✦</span></div>
 <div id="cards" class="cards" aria-label="Draw cards"></div><p id="announcement" class="sr-only" role="status" aria-live="polite"></p><p id="notice" class="notice" role="status" hidden></p>
 <div class="draw-controls">
 <div class="count-control"><span class="control-label">CARDS TO DRAW</span><div class="count-options"><button data-count="6" class="count-button active" aria-pressed="true">6</button><button data-count="7" class="count-button" aria-pressed="false">7</button><label class="custom-count"><span class="sr-only">Custom number of cards</span><input id="count" type="number" min="1" max="35" value="6" aria-label="Number of cards"></label></div></div>
 <button id="draw" class="draw-button" disabled><span class="draw-spark" aria-hidden="true">✦</span><span id="draw-label">Draw 6 cards</span><span aria-hidden="true">↗</span></button>
-<div class="pool-info"><span class="control-label" id="next-round">ELIGIBLE STUDENTS</span><strong id="pool-count">— <small>in the deck</small></strong></div>
+<div class="pool-info"><span class="control-label" id="next-round">ELIGIBLE STUDENTS</span><strong id="pool-count">— <small>available</small></strong></div>
 </div>
 <form id="absence-form" class="absence-control" novalidate><label for="absent">Absent today</label><input id="absent" type="text" autocomplete="off" placeholder="10,21,26" aria-describedby="absence-help"><span id="absence-help">No. separated by commas · no spaces · leave empty if none</span></form>
 </section>
-<p class="rule">Everyone gets a turn before anyone gets a second. <span>Bonus has its own draw.</span></p>
-</main><footer><span>IERG2060 / TUTORIAL 3</span><span>THINK IT THROUGH. TALK IT OUT.</span></footer></div>
+</main></div>
 <dialog id="settings-dialog"><div class="dialog-heading"><h2>Draw settings</h2><button class="icon-button" data-close="settings-dialog" aria-label="Close settings">×</button></div><p>Import roster numbers and previous turns. Draw progress stays in this browser.</p><div class="settings-actions"><button id="choose-file" class="pill">Import CSV / JSON</button><input id="import-file" type="file" accept=".csv,.json" hidden><button id="backup" class="pill">Save draw progress</button></div><details><summary>Read from Google Sheets</summary><form id="sheet-form"><label for="sheet-url">Tutorial 3 worksheet link</label><input id="sheet-url" type="url" placeholder="https://docs.google.com/spreadsheets/d/…" required><button class="pill" type="submit">Read roster</button></form></details><div id="import-preview" hidden><p id="import-summary"></p><button id="confirm-import" class="pill accent">Use these records</button><button id="cancel-import" class="pill">Cancel</button></div><p id="settings-status" role="status"></p></dialog>
-<dialog id="bonus-dialog" class="bonus-dialog"><div class="dialog-heading"><span class="eyebrow">ONE MORE CHANCE</span><button class="icon-button" data-close="bonus-dialog" aria-label="Close bonus window">×</button></div><div id="bonus-container"></div></dialog>
+<dialog id="bonus-dialog" class="bonus-dialog"><div class="dialog-heading"><span class="eyebrow">BONUS</span><button class="icon-button" data-close="bonus-dialog" aria-label="Close bonus window">×</button></div><div id="bonus-container"></div></dialog>
 </body></html>
