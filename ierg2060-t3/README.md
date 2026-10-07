@@ -2,7 +2,9 @@
 
 A student-facing card draw at `/ierg2060-t3/`. It is unlinked from the homepage and marked noindex. There is no grading, score display, attendance table, or identity roster.
 
-Choose **6**, **7**, or a custom number, then draw. Cards reveal in sequence. The entire batch is saved before the animation and counts as drawn immediately. Reload restores that same batch. Numbers cannot repeat in a round; the whole class must pass Q1 before Q2 starts. A batch never spans rounds. If fewer eligible numbers remain than requested, it draws only those numbers. Missing students keep their unfinished turn; if all remaining students are absent, drawing pauses.
+Choose **6**, **7**, or a custom number, then draw. Card positions assign this batch's question numbers: the first selected student presents Question 1, the second Question 2, and so on through Question n. These question numbers restart at 1 for each batch and are independent of participation rounds. The large number is the student roster No.
+
+Cards reveal in sequence. The entire batch is saved before the animation and counts as drawn immediately. Reload restores both the same students and question assignments from the saved order. Students cannot repeat in a participation round; everyone must be drawn once before anyone is drawn twice. A batch never spans participation rounds. If fewer eligible students remain than requested, it draws only those students. Missing students keep their unfinished turn; if all remaining students are absent, drawing pauses.
 
 **Absent today** accepts an empty string or positive roster numbers separated by ASCII commas, for example `10,21,26`. Spaces, Chinese commas, leading zeros, duplicate numbers, and unknown numbers are rejected. Clear the field for a class with no absences. This is an exclusion list only, not an attendance record.
 

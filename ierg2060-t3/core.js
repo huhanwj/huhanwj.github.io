@@ -92,7 +92,7 @@ export function validateState(s) {
   const replayByNo = new Map(replay.students.map(p => [p.no, p]));
   for (const entry of batches) for (const no of entry.numbers) replayByNo.get(no).q[entry.q] = false;
   for (const entry of batches) {
-    if (round(replay) !== entry.q) throw Error('必须完成全班 Question 1 后才能抽取 Question 2。');
+    if (round(replay) !== entry.q) throw Error('必须全班都轮过一次，才能开始第二轮抽签。');
     for (const no of entry.numbers) replayByNo.get(no).q[entry.q] = true;
   }
   const rounds = new Set();
