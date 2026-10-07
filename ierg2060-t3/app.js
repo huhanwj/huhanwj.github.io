@@ -3,8 +3,7 @@ import {setupBonus} from './bonus.js?v=2';
 
 const KEY = 'ierg2060-t3-v2', OLD_KEY = 'ierg2060-t3-v1';
 const $ = id => document.getElementById(id);
-let state = null, incoming = null, bonus = null, writable = false, animating = false;
-const motion = matchMedia('(prefers-reduced-motion: reduce)');
+let state = null, incoming = null, bonus = null, writable = false;
 function notice(text, error = false) {
   $('notice').textContent = text; $('notice').classList.toggle('error', error); $('notice').hidden = !text;
   if ($('settings-dialog').open) $('settings-status').textContent = text;
@@ -20,17 +19,17 @@ function count() {
   if (!Number.isInteger(n) || n < 1 || n > (state?.students.length || 35)) throw Error('Choose a whole number from 1 to the class size.');
   return n;
 }
-function previewCards(numbers = [], animate = false) {
-  const n = numbers.length || Math.max(1,Math.min(Number($('count').value) || 6,35));
-  $('cards').style.setProperty('--columns', Math.min(n,7)); $('cards').replaceChildren();
-  for(let i=0;i<n;i++) {
-    const card=document.createElement('div');card.className=`draw-card${animate?' dealing':numbers.length?' revealed':''}`;
-    card.style.setProperty('--delay',`${Math.min(i,12)*55}ms`);
-    card.innerHTML=`<div class="card-inner"><div class="card-face card-back" aria-hidden="true"><div class="card-topline"><span>IERG2060</span><span>✧</span></div><span class="card-symbol">✦</span><span class="card-bottom">QUESTION ${i+1}</span></div><div class="card-face card-front" aria-hidden="${animate||!numbers.length}"><div class="card-topline"><span>TUTORIAL 03</span><span>✦</span></div><span class="number-label">STUDENT NO.</span><strong class="card-number"></strong><span class="card-bottom">QUESTION ${i+1}</span></div></div>`;
-    card.querySelector('.card-number').textContent=numbers.length?String(numbers[i]).padStart(2,'0'):'';
-    $('cards').append(card);
-    if(animate)setTimeout(()=>{card.classList.add('revealed');card.querySelector('.card-front').setAttribute('aria-hidden','false');},motion.matches?0:450+Math.min(i,20)*130);
-  }
+function previewResults(numbers = []) {
+  const results=$('results');results.replaceChildren();
+  if(!numbers.length)return;
+  const list=document.createElement('ol');list.className='draw-results';
+  numbers.forEach((no,i)=>{
+    const item=document.createElement('li');
+    const q=document.createElement('span');q.className='result-q';q.textContent=`QUESTION ${i+1}`;
+    const n=document.createElement('strong');n.className='result-no';n.textContent=String(no).padStart(2,'0');
+    item.append(q,n);list.append(item);
+  });
+  results.append(list);
 }
 function absentInput() {
   try {
@@ -38,42 +37,42 @@ function absentInput() {
     $('absence-form').classList.remove('invalid');$('absent').removeAttribute('aria-invalid');
     $('absence-help').textContent='No. separated by commas · no spaces · leave empty if none';return absent;
   } catch(error) {
-    $('absence-form').classList.add('invalid');$('absent').setAttribute('aria-invalid','true');$('absence-help').textContent=error.message;return null;
+    $('absence-form').classList.add('invalid');$('absent').setAttribute('aria-invalid','true');
+    $('absence-help').textContent=error.message;return null;
   }
 }
 function controls() {
   const absent=absentInput(),q=state?round(state):0,pool=state&&absent?eligible({...state,absent}):[];
   let n=0;try{n=count();}catch{/* Invalid input disables the draw. */}
-  $('draw').disabled=!writable||!state||!pool.length||!n||absent===null||animating;
-  $('draw-label').textContent=animating?'Revealing…':`Draw ${Math.min(n||6,pool.length||n||6)} cards`;
+  $('draw').disabled=!writable||!state||!pool.length||!n||absent===null;
+  $('draw-label').textContent=`Draw ${Math.min(n||6,pool.length||n||6)} students`;
   $('pool-count').replaceChildren(document.createTextNode(`${pool.length} `));const small=document.createElement('small');small.textContent='available';$('pool-count').append(small);
   $('next-round').textContent=q===2?'BOTH ROUNDS DRAWN':'ELIGIBLE STUDENTS';
-  document.querySelectorAll('[data-count]').forEach(button=>{const active=Number(button.dataset.count)===n;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));button.disabled=animating;});
-  $('count').disabled=animating;$('absent').disabled=animating;$('backup').disabled=!state;
-  $('bonus-open').disabled=!state||!writable||animating||absent===null;$('settings-open').disabled=animating;
+  document.querySelectorAll('[data-count]').forEach(button=>{const active=Number(button.dataset.count)===n;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));});
+  $('backup').disabled=!state;
+  $('bonus-open').disabled=!state||!writable||absent===null;
 }
 function render() {
   const batch=state?.batches.at(-1);$('count').max=state?.students.length||35;$('absent').value=(state?.absent||[]).join(',');
   $('round-label').textContent='THIS DRAW';
   $('deck-caption').textContent=batch?`${batch.numbers.length} students selected`:'';
-  previewCards(batch?.numbers);controls();
+  previewResults(batch?.numbers);controls();
   if(!state)notice('Import your class records in Draw settings to begin.');
   else if(round(state)===2)notice('Both participation rounds are complete.');
   else if(!eligible(state).length)notice('The remaining students in this round are absent. This round stays open.');
 }
-$('draw').onclick=handle(async()=>{
-  if(animating)return;const absent=absentInput();if(absent===null)return;
-  // Persist the whole batch before revealing. Reload never triggers another draw.
+$('draw').onclick=handle(()=>{
+  const absent=absentInput();if(absent===null)return;
+  // Persist the whole batch before showing it. Reload never triggers another draw.
   save(drawBatch({...state,absent},count()));const batch=state.batches.at(-1);
-  notice('');animating=true;controls();$('round-label').textContent='THIS DRAW';$('deck-caption').textContent='Drawing…';
-  previewCards(batch.numbers,true);
-  await new Promise(resolve=>setTimeout(resolve,motion.matches?30:1400+Math.min(batch.numbers.length-1,20)*130));
-  animating=false;$('deck-caption').textContent=`${batch.numbers.length} students selected`;$('announcement').textContent=batch.numbers.map((no,i)=>`Question ${i+1}: student ${no}`).join('. ');controls();
+  notice('');$('round-label').textContent='THIS DRAW';previewResults(batch.numbers);
+  $('deck-caption').textContent=`${batch.numbers.length} students selected`;
+  $('announcement').textContent=batch.numbers.map((no,i)=>`Question ${i+1}: student ${no}`).join('. ');controls();
   if(round(state)===2)notice('Both participation rounds are complete.');
   else if(!eligible(state).length)notice('The remaining students in this round are absent. This round stays open.');
 });
-document.querySelectorAll('[data-count]').forEach(button=>button.onclick=()=>{$('count').value=button.dataset.count;if(!state?.batches.length)previewCards();controls();});
-$('count').oninput=()=>{if(!state?.batches.length&&Number($('count').value)>0)previewCards();controls();};
+document.querySelectorAll('[data-count]').forEach(button=>button.onclick=()=>{$('count').value=button.dataset.count;if(!state?.batches.length)previewResults();controls();});
+$('count').oninput=()=>{if(!state?.batches.length&&Number($('count').value)>0)previewResults();controls();};
 $('absent').oninput=controls;
 const saveAbsence=()=>{const absent=absentInput();if(absent!==null&&state)save({...state,absent});controls();};
 $('absent').onchange=handle(saveAbsence);$('absence-form').onsubmit=handle(saveAbsence);
