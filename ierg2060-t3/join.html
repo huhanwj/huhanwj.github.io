@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#315b3f">
+  <title>Volunteer bonus · IERG 2060</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;min-height:100svh;background:#f5f3e9;color:#253b2f;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:grid;place-items:center;padding:26px 18px}main{width:min(100%,440px);background:#fcfbf6;border:1px solid #d8dece;border-radius:24px;padding:32px 26px;box-shadow:0 14px 45px #35442b0b}.eyebrow{font-size:.73rem;letter-spacing:.15em;color:#687b60;font-weight:650;margin:0 0 22px}.mark{width:48px;height:48px;display:grid;place-items:center;background:#e6eddf;border-radius:14px;font-size:1.6rem;margin-bottom:22px}h1{font-size:2.15rem;line-height:1.12;letter-spacing:-.04em;margin:0 0 16px}p{line-height:1.65;color:#65715e}label{display:block;font-weight:650;margin:26px 0 10px}input{font:inherit;font-size:1.5rem;width:100%;padding:15px;border:1px solid #bbcbb2;border-radius:10px;background:white;color:#253b2f}input:focus,button:focus-visible{outline:3px solid #aabf92;outline-offset:3px}button{font:inherit;font-weight:650;width:100%;padding:15px;border:0;border-radius:10px;background:#315b3f;color:white;margin-top:14px;cursor:pointer;min-height:50px}button:disabled{opacity:.45;cursor:default}.status{font-size:.94rem;min-height:3em;background:#edf1e6;border-radius:10px;padding:14px;margin-top:22px;color:#354e39}.status[data-state=error]{background:#f7ebdd;color:#79542c}.status[data-state=success]{background:#dfebd7;color:#284d31}.note{font-size:.79rem;margin-top:24px}.retry{background:transparent;border:1px solid #aebe9f;color:#315b3f}footer{margin-top:26px;font-size:.73rem;color:#84907c;border-top:1px solid #e1e5d7;padding-top:18px}[hidden]{display:none!important}
+  </style>
+  <script src="vendor/peerjs.min.js" defer></script>
+  <script src="join.js" defer></script>
+</head>
+<body>
+  <main>
+    <p class="eyebrow">IERG 2060 · VOLUNTEER BONUS</p>
+    <div class="mark" aria-hidden="true">✳</div>
+    <h1>Ready to volunteer?</h1>
+    <p>Enter the <strong>No.</strong> shown beside your name on the class roster to join this bonus draw.</p>
+    <form id="join-form">
+      <label for="roster-no">Your roster No.</label>
+      <input id="roster-no" name="no" type="text" inputmode="numeric" autocomplete="off" maxlength="15" placeholder="e.g. 12" required disabled>
+      <button id="join-button" type="submit" disabled>Join the bonus draw</button>
+    </form>
+    <p id="status" class="status" role="status" aria-live="polite">Connecting to your instructor…</p>
+    <button id="retry-button" class="retry" type="button" hidden>Retry connection</button>
+    <p class="note">Keep this page open until your registration is confirmed. If it cannot connect, ask your instructor to add your No. manually. Enter your own No. only.</p>
+    <footer>Only your roster No. is sent to the instructor. This page does not receive names, grades, or the class roster. Entries are self-reported; your instructor may verify your No. in class.</footer>
+  </main>
+</body>
+</html>

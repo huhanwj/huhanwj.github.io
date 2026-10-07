@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow,noarchive"><meta name="referrer" content="no-referrer">
+  <title>IERG2060 · Tutorial 3</title>
+  <link rel="stylesheet" href="style.css">
+  <script defer src="vendor/peerjs.min.js"></script><script defer src="vendor/qrcode.js"></script>
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+<div class="shell">
+  <header><a class="wordmark" href="./">IERG<span>2060</span></a><div class="header-right"><span class="tag">TUTORIAL 03</span><button id="project" class="quiet">投屏模式</button></div></header>
+  <main>
+    <div class="intro"><div><p class="eyebrow">THURSDAY · 17:30–18:15 · WMY 304</p><h1>A little luck.<br><em>A lot of thinking.</em></h1><p class="lede">每个人都有机会，把自己的思路讲清楚。</p></div><div class="intro-note"><span>THE RULE</span><p>全班完成 Q1 后开启 Q2。<br>缺席暂缓，Bonus 另算。</p></div></div>
+    <p id="notice" role="status" aria-live="polite" hidden></p>
+    <section id="setup" class="card setup"><div><p class="eyebrow">START WITH YOUR RECORDS</p><h2>导入 Tutorial 3 名单</h2><p>选择表格导出的 CSV 或本系统的 JSON 备份。只保存编号、分数和出勤；姓名与学号不会被保留。</p></div><label class="button primary">选择 CSV / JSON<input id="initial-file" type="file" accept=".csv,.json" hidden></label><p class="small">也可以展开下面的「数据与备份」，粘贴 Google Sheets 链接读取。</p></section>
+    <div id="dashboard" hidden>
+      <section class="stats" aria-label="轮次进度"><div><span>CLASS SIZE</span><strong id="total">—</strong><small>全班人数</small></div><div><span>QUESTION 1</span><strong id="q1-progress">—</strong><small>已完成 / 全班</small></div><div><span>QUESTION 2</span><strong id="q2-progress">—</strong><small>已完成 / 全班</small></div><div><span>TODAY'S POOL</span><strong id="pool-count">—</strong><small>当前轮次可抽人数</small></div></section>
+      <div class="draw-grid">
+        <section class="card draw-card"><div class="card-top"><span id="round-label" class="tag">QUESTION 1</span><span class="live-dot">正式抽签</span></div><div class="draw-stage" aria-live="polite"><p id="stage-label">WHO'S NEXT?</p><div id="winner">?</div><p id="pool-description"></p></div><button id="draw" class="button primary draw-button">抽取下一位 <span>↗</span></button><form id="confirm-form" hidden><label for="score">本次讲题分数</label><div class="inline"><input id="score" type="number" min="0" step="any" placeholder="含 0 分" required><button class="button primary" type="submit">确认完成</button></div><button class="quiet" id="pending-absent" type="button">这位同学未到场，标记缺席</button><p class="small">确认后才计入轮次；刷新页面会保留待确认的人选。</p></form></section>
+        <section id="bonus-container" class="card bonus-card" aria-label="Bonus 报名"></section>
+      </div>
+      <section class="card attendance private"><div class="section-top"><div><p class="eyebrow">WHO'S HERE?</p><h2>当堂出勤</h2></div><label>课堂 <select id="session" aria-label="课堂"></select></label></div><p id="attendance-note" class="small"></p><div class="attendance-tools"><form id="absent-form" class="inline"><label for="absent-list">缺席编号</label><input id="absent-list" placeholder="例如 10, 21, 26, 31"><button class="button" type="submit">应用缺席名单</button></form><button id="all-present" class="quiet">全员到场</button></div><div id="roster" class="roster"></div><p class="small">勾选表示到场。缺席仅影响当前课堂的候选池，仍需补齐正式轮次。</p></section>
+      <section class="card private"><div class="section-top"><div><p class="eyebrow">THE RECORD</p><h2>讲题记录</h2></div><button id="export-csv" class="button">导出成绩 CSV</button></div><div class="table-wrap"><table><thead><tr><th>编号</th><th>Q1 分数</th><th>Q2 分数</th><th>正式次数</th><th>Bonus 次数</th></tr></thead><tbody id="records"></tbody></table></div><details><summary>本机操作记录与更正</summary><form id="correction-form" class="correction"><label>编号<input id="correct-no" type="number" min="1" required></label><label>轮次<select id="correct-q"><option value="0">Q1</option><option value="1">Q2</option></select></label><label>正确分数<input id="correct-score" type="number" min="0" step="any" required></label><label>原因<input id="correct-reason" required maxlength="180"></label><button class="button" type="submit">保存更正</button></form><p class="small">仅更正已经完成的分数；不会额外占用轮次。</p><ol id="history"></ol></details></section>
+    </div>
+    <details class="card private data"><summary>数据与备份</summary><p>进度保存在当前浏览器。下课后导出 JSON 备份，换设备时再导入；不会自动写回 Google Sheets。</p><div class="actions"><label class="button">导入 CSV / JSON<input id="import-file" type="file" accept=".csv,.json" hidden></label><button id="backup" class="button">导出完整备份</button></div><form id="sheet-form"><label for="sheet-url">Google Sheets 链接（Tutorial 3 工作表）</label><div class="inline"><input id="sheet-url" type="url" placeholder="https://docs.google.com/spreadsheets/d/…/edit?gid=…" required><button class="button" type="submit">读取表格</button></div></form><p class="small">读取将预览导入人数和完成情况，再由你确认替换。若表格不允许跨域访问，请下载 CSV 导入。</p><p class="small">这是不在主页导航中显示的页面，并非密码保护页面。班级数据只存于你的浏览器与手动导出的文件。</p></details>
+  </main><footer><span>IERG2060 · Tutorial 3</span><span>Think it through. Talk it out.</span></footer>
+</div>
+<dialog id="import-dialog"><h2>确认导入</h2><p id="import-summary"></p><p>会替换本机当前进度、当堂出勤与操作记录。已有数据请先导出备份。</p><div class="actions"><button id="cancel-import" class="button">取消</button><button id="confirm-import" class="button primary">确认导入</button></div></dialog>
+</body></html>
