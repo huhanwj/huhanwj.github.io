@@ -1,4 +1,4 @@
-import {createCloudClient} from './cloud.js?v=6';
+import {createCloudClient} from './cloud.js?v=7';
 
 const params = new URLSearchParams(location.hash.slice(1));
 if (!params.has('cloud')) {

@@ -1,8 +1,12 @@
 // Apps Script's HTML bridge handles Google requests without cross-origin fetch.
-export function createCloudClient(value) {
+export function cloudEndpoint(value) {
   const url = new URL(value);
   if (url.origin !== 'https://script.google.com' || !/^\/macros\/s\/[\w-]+\/exec$/.test(url.pathname)) throw Error('Use the deployed Apps Script Web app URL ending in /exec.');
-  const endpoint = `${url.origin}${url.pathname}`, channel = crypto.randomUUID();
+  return `${url.origin}${url.pathname}`;
+}
+
+export function createCloudClient(value) {
+  const endpoint=cloudEndpoint(value),url=new URL(endpoint),channel=crypto.randomUUID();
   url.search = new URLSearchParams({channel}).toString(); url.hash = '';
   const frame = document.createElement('iframe');
   frame.hidden = true; frame.title = 'Google Sheets connection'; frame.src = url.href;
@@ -11,7 +15,7 @@ export function createCloudClient(value) {
   const ready = new Promise((resolve,reject)=>{readyResolve=resolve;readyReject=reject;});
   // A rejected connection is surfaced by call(), even if loading finishes first.
   ready.catch(()=>{});
-  const timer = setTimeout(()=>readyReject(Error('Google Sheets did not connect. Check the Web app deployment and access settings.')),30000);
+  const timer = setTimeout(()=>readyReject(Error('Google Sheets did not connect. Open the Google sign-in link in settings, use the authorized account, then reconnect. If it still fails, check the deployment and browser cookie settings.')),30000);
   function receive(event) {
     const data=event.data;
     if(!data || data.channel!==channel || stopped)return;

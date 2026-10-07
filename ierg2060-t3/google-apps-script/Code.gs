@@ -1,16 +1,16 @@
 /* Private, owner-executed persistence. Setup requires the signed-in owner. */
 const SOURCE_ID_ = '1_i5yaOroKaS4I0wgp5NYtLNmpHnwMHYdwUjviUnwUIs';
 const SOURCE_GID_ = 521726463;
+const ADMIN_EMAIL_ = 'huhanwj@gmail.com';
 
 function setup() {
-  const active = Session.getActiveUser().getEmail();
-  const effective = Session.getEffectiveUser().getEmail();
-  if (!active || active !== effective) throw Error('Only the signed-in script owner can run setup.');
-  return setup_();
+  authenticate_();
+  return locked_(setup_);
 }
 
 function setup_() {
   const properties = PropertiesService.getScriptProperties();
+  properties.deleteProperty('ADMIN_KEY');
   let id = properties.getProperty('STORE_ID');
   if (!id) {
     const book = SpreadsheetApp.create('IERG2060 Tutorial 3 — private draw progress');
@@ -20,13 +20,34 @@ function setup_() {
     id = book.getId();
     properties.setProperty('STORE_ID', id);
   }
-  if (!properties.getProperty('ADMIN_KEY')) properties.setProperty('ADMIN_KEY', Utilities.getUuid() + Utilities.getUuid());
-  console.log('Private storage: https://docs.google.com/spreadsheets/d/' + id);
-  console.log('Admin key (keep private): ' + properties.getProperty('ADMIN_KEY'));
-  console.log('Roster verified: ' + roster_().length + ' Tutorial 3 students.');
+  const book = SpreadsheetApp.openById(id);
+  if (!book.getSheetByName('Roster')) {
+    // Validate the permitted source fields before creating the private snapshot.
+    const roster = sourceRoster_();
+    const sheet = book.insertSheet('Roster');
+    try {
+      sheet.getRange(2,2,roster.length,1).setNumberFormat('@');
+      // Leading apostrophes store names as literal text, even if they start '='.
+      const rows = [['No.','Name','Turn1','Turn2']].concat(roster.map(p => [p.no,"'" + p.name,p.q[0],p.q[1]]));
+      sheet.getRange(1,1,rows.length,4).setValues(rows);
+      sheet.setFrozenRows(1);
+      SpreadsheetApp.flush();
+    } catch (error) {
+      book.deleteSheet(sheet);
+      throw error;
+    }
+  }
+  roster_();
+  const storageUrl = 'https://docs.google.com/spreadsheets/d/' + id;
+  console.log('Private storage: ' + storageUrl);
+  return {storageUrl:storageUrl};
 }
 
 function doGet(e) {
+  if (!e || !e.parameter || !e.parameter.channel) {
+    authenticate_();
+    return HtmlService.createHtmlOutput('<p>Google account confirmed. Return to the draw page and click Connect Google Sheets.</p>').setTitle('IERG2060 administrator');
+  }
   const template = HtmlService.createTemplateFromFile('Bridge');
   const channel = e && e.parameter && e.parameter.channel;
   template.channel = typeof channel === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(channel) ? channel : '';
@@ -37,8 +58,9 @@ function rpc(action, payload) {
   payload = payload || {};
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw Error('Invalid cloud request.');
   const publicAction = action === 'bonusJoin' || action === 'bonusInfo';
-  if (!publicAction) authenticate_(payload.adminKey);
-  if (action === 'auth') return {ok:true};
+  const email = publicAction ? null : authenticate_();
+  if (Object.prototype.hasOwnProperty.call(payload, 'adminKey') || Object.prototype.hasOwnProperty.call(payload, 'email')) throw Error('Account credentials must not be supplied in a cloud request.');
+  if (action === 'auth') return {ok:true,email:email};
   if (action === 'names') return {roster:roster_()};
   if (action === 'load') {
     return locked_(function () {
@@ -57,7 +79,7 @@ function rpc(action, payload) {
     const document = read_();
     if (action === 'bonusJoin') return join_(document, payload);
     const requestId = token_(payload.requestId, 'A requestId is required.');
-    const fingerprint = digest_({action:action,payload:Object.keys(payload).filter(k => k !== 'adminKey').sort().reduce((o,k) => {o[k]=payload[k];return o;}, {})});
+    const fingerprint = digest_({action:action,payload:Object.keys(payload).sort().reduce((o,k) => {o[k]=payload[k];return o;}, {})});
     const prior = document.requests.find(r => r.id === requestId);
     if (prior) {
       if (prior.fingerprint !== fingerprint) throw Error('This requestId was already used for a different operation.');
@@ -122,9 +144,13 @@ function rpc(action, payload) {
   });
 }
 
-function authenticate_(key) {
-  const expected = PropertiesService.getScriptProperties().getProperty('ADMIN_KEY');
-  if (!expected || typeof key !== 'string' || key !== expected) throw Error('Enter the correct private admin key.');
+function authenticate_() {
+  // An owner-executed public deployment has the owner's effective identity even
+  // for anonymous callers. Only the server's active user identifies the caller.
+  const active = Session.getActiveUser().getEmail();
+  const effective = Session.getEffectiveUser().getEmail();
+  if (active !== ADMIN_EMAIL_ || effective !== ADMIN_EMAIL_) throw Error('Sign in to Google as ' + ADMIN_EMAIL_ + ' and open the private admin connection.');
+  return active;
 }
 function locked_(fn) {
   const lock = LockService.getScriptLock();
@@ -172,7 +198,7 @@ function join_(document, payload) {
   return {status:'joined',no:no,duplicate:duplicate};
 }
 
-function roster_() {
+function sourceRoster_() {
   const sheet = SpreadsheetApp.openById(SOURCE_ID_).getSheets().find(s => s.getSheetId() === SOURCE_GID_);
   if (!sheet) throw Error('Tutorial 3 source worksheet was not found.');
   // Header cells only; the Student ID column is never read below the header.
@@ -199,12 +225,25 @@ function roster_() {
   const q1 = read('Question1').map(completed), q2 = read('Question2').map(completed);
   const roster = nos.map((v,i) => ({no:/^\d+$/.test(v.trim()) ? Number(v) : null,name:names[i].trim(),q:[q1[i],q2[i]],className:classes[i].trim()}))
     .filter(p => p.no > 0 && p.className === 'Tutorial 3').map(p => ({no:p.no,name:p.name,q:p.q})).sort((a,b) => a.no-b.no);
-  if (!roster.length || roster.length > 500 || roster.some(p => !Number.isSafeInteger(p.no)) || new Set(roster.map(p => p.no)).size !== roster.length) throw Error('The Tutorial 3 roster has invalid or duplicate numbers.');
+  return validateRoster_(roster);
+}
+function roster_() {
+  const sheet = book_().getSheetByName('Roster');
+  if (!sheet) throw Error('The private roster is missing. The owner must run setup.');
+  const count = sheet.getLastRow() - 1;
+  if (count < 1 || count > 500) throw Error('The private roster must contain 1 to 500 students.');
+  const rows = sheet.getRange(1,1,count+1,4).getValues();
+  if (JSON.stringify(rows[0]) !== JSON.stringify(['No.','Name','Turn1','Turn2'])) throw Error('The private roster headers are invalid.');
+  return validateRoster_(rows.slice(1).map(row => ({no:row[0],name:row[1],q:[row[2],row[3]]}))).sort((a,b) => a.no-b.no);
+}
+function validateRoster_(roster) {
+  if (!roster.length || roster.length > 500 || roster.some(p => !Number.isSafeInteger(p.no) || p.no < 1) || new Set(roster.map(p => p.no)).size !== roster.length) throw Error('The Tutorial 3 roster has invalid or duplicate numbers.');
+  if (roster.some(p => typeof p.name !== 'string' || !p.name.trim() || p.name.length > 200 || !Array.isArray(p.q) || p.q.length !== 2 || p.q.some(q => typeof q !== 'boolean'))) throw Error('The private roster requires names up to 200 characters and boolean participation flags.');
   return roster;
 }
 function refreshNames_(state, roster) {
   const byNo = new Map(roster.map(p => [p.no,p.name]));
-  if (state.students.length !== roster.length || state.students.some(p => !byNo.has(p.no))) throw Error('The source roster changed. Ask the instructor to review cloud progress.');
+  if (state.students.length !== roster.length || state.students.some(p => !byNo.has(p.no))) throw Error('The private roster changed. Ask the instructor to review cloud progress.');
   state.students.forEach(p => {p.name=byNo.get(p.no) || '';});
 }
 function token_(value, message) {

@@ -1,31 +1,36 @@
 # Private Google Sheets persistence
 
-This backend runs as the instructor and stores draws in a separate private Google spreadsheet. It reads the original Tutorial 3 roster, using only roster No., Name, Tutorial Class, and two participation flags. Student ID cells are never read. Question values become booleans immediately; scores never enter saved state or browser responses. The original worksheet is not edited.
+This backend runs as the instructor and stores draws and a roster snapshot in a separate private Google spreadsheet. Owner setup copies the original Tutorial 3 roster once, using only roster No., Name, Tutorial Class, and two participation flags. Student ID cells are never read. Question values become booleans immediately; numeric grades never enter the private snapshot, saved state, or browser responses. Future requests use only the private snapshot, so later edits to the shared source cannot change names or initial participation. The original worksheet, its sharing settings, and its collaborators are not changed.
 
 ## One-time setup
 
-1. Sign in to the Google account that can read the original worksheet. Open [Apps Script](https://script.google.com/home) and create a standalone project.
+1. Sign in as **huhanwj@gmail.com**, with access to the original worksheet. Open [Apps Script](https://script.google.com/home) and create a standalone project owned by this account.
 2. Replace `Code.gs` with this directory's `Code.gs`. Add an HTML file named `Bridge` and paste `Bridge.html` into it.
 3. In **Project Settings**, enable **Show appsscript.json manifest file in editor**. Replace that manifest with this directory's `appsscript.json`.
-4. Select `setup` in the editor's function menu, click **Run**, and authorize the spreadsheet access as the owner. This creates the separate private storage spreadsheet. Running setup again reuses the same spreadsheet and admin key. The setup entry point rejects anonymous callers and signed-in users who are not the script owner.
-5. Open the execution log and privately copy the generated admin key and storage spreadsheet link. Keep the key out of the repository, URLs, QR codes, screenshots, and student messages. Leave the storage spreadsheet private. Only the owner needs access to it.
-6. Choose **Deploy → New deployment → Web app**. Set **Execute as** to **Me** and **Who has access** to **Anyone**. Deploy and copy the final URL ending in `/exec`. If the organization disables anonymous web apps, this account cannot provide sign-in-free student registration; use an account whose policy permits it.
-7. In the draw page's cloud settings, enter that `/exec` URL and private admin key, then connect. An empty cloud returns roster names and participation flags. Review the local migration or initial roster progress, then explicitly initialize the cloud once. Existing cloud progress takes precedence on later connections.
-8. Verify a complete Bonus round from a phone's private browser window. The student should see the registration form without a Google sign-in or authorization prompt. Close registration on the instructor page before drawing. Reload the instructor page to confirm the saved result remains.
+4. Select `setup` in the editor's function menu, click **Run**, and authorize spreadsheet and email access. This creates the separate private storage spreadsheet, or reuses the existing `STORE_ID`. If its `Roster` tab is missing, setup copies the permitted source fields into that private tab; later setup runs preserve the existing snapshot and never read or overwrite it from the source. It also deletes an obsolete `ADMIN_KEY` property. Setup requires both the active and effective Google identities to be exactly `huhanwj@gmail.com`; an empty identity fails. Its log and return value contain only the private storage link.
+5. Keep that storage spreadsheet private. Do not clear `STORE_ID` when upgrading an existing project: it points to the saved progress used by both deployments.
+6. Choose **Deploy → New deployment → Web app** for the **admin deployment**. Set **Execute as** to **Me (huhanwj@gmail.com)** and **Who has access** to **Only myself**. Deploy and copy its final `/exec` URL. Open it once in the browser while signed in as this account to complete any Google authorization or access prompts.
+7. Create a second Web app deployment in **the same Apps Script project** for **student registration**. Set **Execute as** to **Me (huhanwj@gmail.com)** and **Who has access** to **Anyone**. Copy its different `/exec` URL. These deployments share script properties, private storage, and the script lock. Do not create a second project or share the storage sheet. If account policy disables anonymous web apps, sign-in-free registration is unavailable under that policy.
+8. In the draw page's cloud settings, enter the private **admin URL** and public **student URL**, then connect while signed in as `huhanwj@gmail.com`. The student URL is used for Bonus signup and QR links. No password, email field, Google token, or credential URL parameter is required. An empty cloud returns roster names and participation flags to the authenticated instructor. Review initial progress, then explicitly initialize the cloud once. Existing cloud progress takes precedence on later connections.
+9. Verify that the admin connection succeeds for `huhanwj@gmail.com` and fails in an anonymous browser or with another account. Verify a complete Bonus round from a phone's private browser window using the student QR code. Students should see the registration form without a Google sign-in or authorization prompt. Close registration on the instructor page before drawing, then reload it to confirm the saved result remains.
 
-For code updates, use **Deploy → Manage deployments → Edit → Version → New version → Deploy**. This preserves the `/exec` URL. The deployment owner performs these steps; this repository does not deploy or contain the secret key.
+For code updates, create a new version and update **both** deployments through **Deploy → Manage deployments → Edit → Version → Deploy**. Each deployment keeps its own `/exec` URL and access setting. Upgrading an old password-based deployment requires updating its code too; an older deployed version keeps its old authentication until replaced or archived. Run `setup` as the owner after updating to remove the obsolete key property. The deployment owner performs these steps; this repository does not deploy the project.
+
+Google documents that [`Session.getActiveUser().getEmail()`](https://developers.google.com/apps-script/reference/base/session#getActiveUser()) may be blank in owner-executed web apps, with restrictions generally lifted when the developer runs the script themselves. The backend rejects a blank identity and never substitutes `getEffectiveUser()` alone: that method identifies the execution owner even for anonymous student callers. If the private iframe cannot establish the signed-in owner because of browser cookie restrictions or account policy, open the private admin URL directly, complete Google access, and retry. A remaining blank identity is an access failure; verify the live deployment in that browser before using it for class.
+
+Only `huhanwj@gmail.com` is allowed for administrative RPC. Script-editor collaborators can change code and properties, so project editing access is trusted access; a collaborator's Google account is not automatically admitted by the application allowlist.
 
 ## Transport and actions
 
-The public page embeds `/exec?channel=<random UUID>` in an iframe. Apps Script wraps the bridge in a Google iframe, so its ready message comes from the inner `*.googleusercontent.com` frame. The parent validates the expected channel and Google origin, then pins the source window. The bridge accepts messages only from its top window at `https://huhanwj.github.io` or HTTP localhost/127.0.0.1 development origins.
+The draw page embeds the admin deployment's `/exec?channel=<random UUID>`; the student page embeds the public deployment's URL with its own channel. Apps Script wraps the bridge in a Google iframe, so its ready message comes from the inner `*.googleusercontent.com` frame. The parent validates the expected channel and Google origin, then pins the source window. The bridge accepts messages only from its top window at `https://huhanwj.github.io` or HTTP localhost/127.0.0.1 development origins.
 
 Request envelope: `{type:'ierg-rpc',channel,id,action,payload}`. Response: `{type:'ierg-rpc-result',channel,id,result,error}`. Ready: `{type:'ierg-ready',channel}`. Browser requests go through `google.script.run`; no cross-origin fetch or public CORS proxy is needed. RPC authentication still protects every administrative action even when someone opens the bridge directly.
 
-Every admin payload includes `adminKey`. Every mutation except public signup includes a unique, stable `requestId`; retries reuse the exact payload and ID.
+Every action except `bonusJoin` and `bonusInfo` checks the server-provided active and effective email before reading private data or mutating state. The `auth` result confirms the authenticated account. Payloads containing `email` or the retired `adminKey` are rejected; client-supplied identity is never authentication. Every mutation except public signup includes a unique, stable `requestId`; retries reuse the exact payload and ID.
 
 | Action | Additional payload | Result |
 | --- | --- | --- |
-| `auth` | — | `{ok:true}` |
+| `auth` | — | `{ok:true,email:'huhanwj@gmail.com'}` |
 | `load` | — | `{state,revision,roster}`; state is `null` until initialized |
 | `names` | — | `{roster}` |
 | `initialize` | `state,revision,requestId` | `{state,revision}`; cloud must be empty |
@@ -39,9 +44,11 @@ Every admin payload includes `adminKey`. Every mutation except public signup inc
 | `bonusJoin` (public) | `room,no` | `{status:'joined',no,duplicate}` |
 | `bonusInfo` (public) | `room` | `{id,open,winner}` |
 
-`roster` contains `{no,name,q:[boolean,boolean]}`. Version 2 state contains `{version,students,absent,batches,bonus}`; student names are resolved from the source by the server. An admin room contains `{id,open,entrants:[number],winner:null|{no,name},absent:[number],drawnAt:null|ISO}`. The student endpoints never return the roster or registration list. Students self-report a roster number; this does not authenticate their identity. Duplicate numbers count once, and the instructor can remove an erroneous entry before drawing.
+`roster` contains `{no,name,q:[boolean,boolean]}`. Version 2 state contains `{version,students,absent,batches,bonus}`; student names are resolved from the private snapshot by the server. An admin room contains `{id,open,entrants:[number],winner:null|{no,name},absent:[number],drawnAt:null|ISO}`. The student endpoints never return the roster or registration list. Students self-report a roster number; this does not authenticate their identity. Duplicate numbers count once, and the instructor can remove an erroneous entry before drawing.
 
 ## Persistence and recovery
+
+The private `Roster` tab contains exactly `No.`, `Name`, `Turn1`, and `Turn2`: positive unique safe-integer roster numbers, literal text names of at most 200 characters, and actual boolean participation flags. Names are escaped as text when copied, so a leading `=` cannot become a formula. No Student ID or numeric grade column is copied. Setup validates source data before creating this tab and removes the new tab if its write fails. The existing tab is preserved on later setup runs; owner corrections belong in the private snapshot after reviewing saved progress. Keep the two participation columns as actual boolean values, not text or numeric grades.
 
 The private `State!A1` JSON is authoritative. A script lock serializes updates and signups; formal saves compare revisions, forbid participation rollback, and preserve Bonus results committed by the server. Server draws choose a single winner with Apps Script's `Math.random`, then store the winner and increment the state revision before responding. Retrying a draw returns the saved result. Registration survives closing or reloading the instructor's browser.
 
@@ -49,4 +56,4 @@ The last 30 admin mutation request IDs are retained. Reusing an ID with a differ
 
 The `Draw log` tab is derived from canonical state and contains only numbers, names, rounds, and timestamps. If this readable log fails to refresh, canonical progress remains committed. Reload or the next successful mutation refreshes displayed cloud state; the next mutation regenerates the log. Do not edit `State!A1` manually. Export the browser's JSON backup before administrative recovery. The backend refuses a canonical cell larger than 45,000 characters instead of truncating history.
 
-To rotate a compromised admin key, change the `ADMIN_KEY` value in Apps Script **Project Settings → Script properties** to a new long random secret, then reconnect the instructor page. No redeployment is needed. Do not publish the key or make the private storage spreadsheet public.
+Keep the admin deployment set to **Only myself**, the student deployment set to **Anyone**, and both set to execute as `huhanwj@gmail.com`. Google account access controls protect the instructor session. Never make the private storage spreadsheet public.
