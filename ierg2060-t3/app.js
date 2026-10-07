@@ -53,7 +53,7 @@ function controls(){
   $('cloud-initialize').hidden=!initial;$('cloud-initialize').disabled=busy||!connected;
   $('cloud-source-initialize').hidden=!initial;$('cloud-source-initialize').disabled=busy||!connected;
 }
-function render(){const batch=state?.batches.at(-1);$('count').max=state?.students.length||35;$('absent').value=(state?.absent||[]).join(',');$('round-label').textContent='THIS DRAW';$('deck-caption').textContent=batch?`${batch.numbers.length} students selected`:'';previewResults(batch?.numbers);controls();if(!state)notice('Import your class records or connect Google Sheets in Draw settings.');else if(round(state)===2)notice('Both participation rounds are complete.');else if(!eligible(state).length)notice('The remaining students in this round are absent. This round stays open.');}
+function render(){const batch=state?.batches.at(-1);$('count').max=state?.students.length||35;$('absent').value=(state?.absent||[]).join(',');$('round-label').textContent='THIS DRAW';$('deck-caption').textContent=batch?`${batch.numbers.length} students selected`:'';previewResults(batch?.numbers);controls();if(!state)notice('Connecting to Google Sheets…');else if(round(state)===2)notice('Both participation rounds are complete.');else if(!eligible(state).length)notice('The remaining students in this round are absent. This round stays open.');}
 async function exclusive(fn){if(busy)return;busy=true;controls();try{return await fn();}finally{busy=false;controls();}}
 $('draw').onclick=handle(async()=>{
   if(busy||cooldown||pending||$('draw').disabled)return;
