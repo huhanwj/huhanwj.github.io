@@ -1,4 +1,4 @@
-// No identities or source records are bundled with this public page.
+// Only class numbers, completed turns and draw history belong in public-page state.
 export function parseCSV(text) {
   const rows = []; let row = [], field = '', quoted = false;
   text = text.replace(/^\uFEFF/, '');
@@ -19,70 +19,147 @@ export function parseCSV(text) {
   return rows;
 }
 
-export function scoreValue(value) {
-  if (String(value).trim() === '') throw Error('请输入分数；0 分也算完成本轮。');
-  const score = Number(value);
-  if (!Number.isFinite(score) || score < 0) throw Error('分数必须是大于或等于 0 的数字。');
-  return score;
-}
-
 export function fromSheet(text) {
   const rows = parseCSV(text);
-  const header = rows.findIndex(r => r[0]?.trim() === 'No.' && r.some(x => x.trim() === 'Question 1'));
+  const heading = value => value.trim().replace(/\s+/g, '');
+  const header = rows.findIndex(r => r.some(x => heading(x) === 'No.') && r.some(x => heading(x) === 'Question1'));
   if (header < 0) throw Error('未找到 No. / Question 1 表头，请导出 Tutorial 3 工作表为 CSV。');
-  const columns = rows[header].map(x => x.trim());
-  const col = name => { const i = columns.indexOf(name); if (i < 0) throw Error(`缺少 ${name} 列。`); return i; };
-  const classCol = col('Tutorial Class'), q1 = col('Question 1'), q2 = col('Question 2');
-  const attendanceCols = Array.from({length: 10}, (_, i) => col(`Tutorial ${i + 1}`));
-  const now = new Date().toISOString();
-  const students = rows.slice(header + 1).filter(r => /^\d+$/.test(r[0]?.trim()) && r[classCol]?.trim() === 'Tutorial 3').map(r => ({
-    no: Number(r[0]),
-    q: [q1, q2].map(i => r[i]?.trim() ? {score: scoreValue(r[i]), at: now, source: 'sheet'} : null),
-    attendance: attendanceCols.map(i => { const a = (r[i] || '').trim().toUpperCase(); if (!['', 'P', 'A'].includes(a)) throw Error(`编号 ${r[0]} 的考勤值无效。`); return a; })
-  })).sort((a,b) => a.no-b.no);
+  const columns = rows[header].map(heading);
+  const col = name => {
+    const i = columns.indexOf(name);
+    if (i < 0 || columns.lastIndexOf(name) !== i) throw Error(`缺少或重复 ${name} 列。`);
+    return i;
+  };
+  const noCol = col('No.'), classCol = col('TutorialClass'), qCols = [col('Question1'), col('Question2')];
+  const students = rows.slice(header + 1)
+    .filter(r => /^\d+$/.test((r[noCol] || '').trim()) && r[classCol]?.trim() === 'Tutorial 3')
+    .map(r => ({
+      no: Number(r[noCol]),
+      q: qCols.map(i => {
+        const cell = (r[i] || '').trim();
+        if (!cell) return false;
+        if (!Number.isFinite(Number(cell))) throw Error(`编号 ${r[noCol]} 的 Question 单元格必须是数字或空白。`);
+        return true;
+      })
+    }));
   if (!students.length) throw Error('没有找到 Tutorial 3 学生记录。');
-  let latest = 0;
-  for (let i = 0; i < 10; i++) if (students.some(s => s.attendance[i])) latest = i + 1;
-  const session = Math.min(latest + 1, 10);
-  return validateState({version: 1, students, session, absent: students.filter(p=>p.attendance[session-1]==='A').map(p=>p.no), pending: null, history: [], importedAt: now, updatedAt: now});
+  return validateState({ version: 2, students, absent: [], batches: [], bonus: [] });
+}
+
+function knownNumbers(values, known, message, allowEmpty = true) {
+  if (!Array.isArray(values) || (!allowEmpty && !values.length) || values.length > 500 ||
+      [...values].some(n => !Number.isSafeInteger(n) || !known.has(n)) || new Set(values).size !== values.length) throw Error(message);
+  return [...values];
+}
+
+function timestamp(value) {
+  if (typeof value !== 'string' || !value.trim() || !Number.isFinite(Date.parse(value))) throw Error('抽签时间无效。');
+  return new Date(value).toISOString();
+}
+
+function token(value, message) {
+  if (typeof value !== 'string' || !value.trim() || value.length > 200) throw Error(message);
+  return value;
 }
 
 export function validateState(s) {
-  if (!s || s.version !== 1 || !Array.isArray(s.students) || !s.students.length || s.students.length > 500) throw Error('备份格式无效。');
-  const numbers = s.students.map(p => p.no);
-  if (numbers.some(n => !Number.isSafeInteger(n) || n < 1) || new Set(numbers).size !== numbers.length) throw Error('编号无效或重复。');
-  for (const p of s.students) {
-    if (!Array.isArray(p.q) || p.q.length !== 2 || !Array.isArray(p.attendance) || p.attendance.length !== 10 || p.attendance.some(a => !['P','A',''].includes(a))) throw Error('学生记录格式无效。');
-    for (const q of p.q) if (q !== null && (!q || typeof q.score !== 'number' || !Number.isFinite(q.score) || q.score < 0)) throw Error('分数记录无效。');
-  }
-  if (!Number.isInteger(s.session) || s.session < 1 || s.session > 10 || !Array.isArray(s.absent) || s.absent.some(n => !numbers.includes(n)) || new Set(s.absent).size !== s.absent.length || !Array.isArray(s.history)) throw Error('课堂记录无效。');
-  const bonusRounds = new Set();
-  for (const entry of s.history) {
-    if (!entry || !['draw','complete','absence','attendance','session','bonus','correction'].includes(entry.type) || !Number.isFinite(Date.parse(entry.at)) || !Number.isInteger(entry.session) || entry.session < 1 || entry.session > 10) throw Error('操作记录无效。');
-    if (entry.no !== undefined && !numbers.includes(entry.no)) throw Error('操作记录包含未知编号。');
-    if (['draw','complete','absence','correction'].includes(entry.type) && (!numbers.includes(entry.no) || ![0,1].includes(entry.q))) throw Error('正式轮次记录无效。');
-    if (['complete','correction'].includes(entry.type) && (typeof entry.score !== 'number' || !Number.isFinite(entry.score) || entry.score < 0)) throw Error('历史分数无效。');
-    if (entry.type === 'bonus') {
-      if (!numbers.includes(entry.no) || typeof entry.round !== 'string' || !entry.round || bonusRounds.has(entry.round) || !Array.isArray(entry.entrants) || !entry.entrants.includes(entry.no) || entry.entrants.some(n=>!numbers.includes(n)) || new Set(entry.entrants).size !== entry.entrants.length) throw Error('Bonus 记录无效或重复。');
-      bonusRounds.add(entry.round);
+  if (!s || s.version !== 2 || !Array.isArray(s.students) || !s.students.length || s.students.length > 500) throw Error('备份格式无效。');
+  const students = s.students.map(p => {
+    if (!p || !Number.isSafeInteger(p.no) || p.no < 1 || !Array.isArray(p.q) || p.q.length !== 2 || [...p.q].some(q => typeof q !== 'boolean')) throw Error('编号或抽签进度无效。');
+    return { no: p.no, q: [...p.q] };
+  }).sort((a, b) => a.no - b.no);
+  const known = new Set(students.map(p => p.no));
+  if (known.size !== students.length) throw Error('编号重复。');
+  const absent = knownNumbers(s.absent, known, '缺席名单无效或重复。').sort((a, b) => a - b);
+  if (!Array.isArray(s.batches) || s.batches.length > 500 || !Array.isArray(s.bonus) || s.bonus.length > 500) throw Error('抽签记录格式无效。');
+  const ids = new Set(), drawn = new Set();
+  const byNo = new Map(students.map(p => [p.no, p]));
+  const batches = s.batches.map(entry => {
+    if (!entry || ![0, 1].includes(entry.q)) throw Error('正式轮次记录无效。');
+    const id = token(entry.id, '批次编号无效。');
+    if (ids.has(id)) throw Error('批次编号重复。');
+    ids.add(id);
+    const numbers = knownNumbers(entry.numbers, known, '批次包含未知或重复编号。', false);
+    for (const no of numbers) {
+      const key = `${entry.q}:${no}`;
+      if (drawn.has(key) || !byNo.get(no).q[entry.q]) throw Error('批次与抽签进度不一致。');
+      drawn.add(key);
     }
+    return { id, q: entry.q, numbers, at: timestamp(entry.at) };
+  });
+  // Reconstruct imported progress, then verify every retained batch was in its round.
+  const replay = { students: students.map(p => ({ no: p.no, q: [...p.q] })) };
+  const replayByNo = new Map(replay.students.map(p => [p.no, p]));
+  for (const entry of batches) for (const no of entry.numbers) replayByNo.get(no).q[entry.q] = false;
+  for (const entry of batches) {
+    if (round(replay) !== entry.q) throw Error('必须完成全班 Question 1 后才能抽取 Question 2。');
+    for (const no of entry.numbers) replayByNo.get(no).q[entry.q] = true;
   }
-  if (s.pending && (!numbers.includes(s.pending.no) || ![0,1].includes(s.pending.q) || s.students.find(p=>p.no===s.pending.no).q[s.pending.q] !== null || s.absent.includes(s.pending.no) || s.pending.q !== round(s))) throw Error('待确认抽签记录无效。');
-  return s;
+  const rounds = new Set();
+  const bonus = s.bonus.map(entry => {
+    if (!entry || !known.has(entry.no)) throw Error('Bonus 记录包含未知编号。');
+    const id = token(entry.round, 'Bonus 轮次编号无效。');
+    const entrants = knownNumbers(entry.entrants, known, 'Bonus 报名名单无效或重复。', false);
+    if (rounds.has(id) || !entrants.includes(entry.no)) throw Error('Bonus 结果无效或重复。');
+    rounds.add(id);
+    return { round: id, no: entry.no, entrants, drawnAt: timestamp(entry.drawnAt) };
+  });
+  return { version: 2, students, absent, batches, bonus };
+}
+
+export function migrateState(old) {
+  if (old?.version === 2) return validateState(old);
+  if (!old || old.version !== 1 || !Array.isArray(old.students)) throw Error('备份格式无效。');
+  const students = old.students.map(p => {
+    if (!p || !Array.isArray(p.q) || p.q.length !== 2 || [...p.q].some(q => q !== null && (typeof q !== 'object' || Array.isArray(q)))) throw Error('旧版学生记录无效。');
+    return { no: p.no, q: p.q.map(q => q !== null) };
+  });
+  const state = validateState({ version: 2, students, absent: old.absent, batches: [], bonus: [] });
+  if (old.pending != null) {
+    const pending = old.pending;
+    const student = state.students.find(p => p.no === pending.no);
+    if (!student || ![0, 1].includes(pending.q) || pending.q !== round(state) || student.q[pending.q] || state.absent.includes(pending.no)) throw Error('旧版待确认抽签记录无效。');
+    student.q[pending.q] = true;
+    state.batches.push({ id: crypto.randomUUID(), q: pending.q, numbers: [pending.no], at: timestamp(pending.at) });
+  }
+  return validateState(state);
 }
 
 export function round(s) {
-  return [0,1].find(q => s.students.some(p => p.q[q] === null)) ?? 2;
+  return [0, 1].find(q => s.students.some(p => !p.q[q])) ?? 2;
 }
 
 export function eligible(s) {
   const q = round(s);
-  return q === 2 ? [] : s.students.filter(p => p.q[q] === null && !s.absent.includes(p.no));
+  return q === 2 ? [] : s.students.filter(p => !p.q[q] && !s.absent.includes(p.no));
+}
+
+export function parseAbsent(text, students) {
+  if (typeof text !== 'string' || (text !== '' && !/^[1-9]\d*(,[1-9]\d*)*$/.test(text))) throw Error('请只用英文逗号分隔正整数编号，不要添加空格。');
+  const known = new Set(students.map(p => p.no));
+  return knownNumbers(text === '' ? [] : text.split(',').map(Number), known, '缺席名单包含未知或重复编号。').sort((a, b) => a - b);
 }
 
 export function pick(items) {
-  if (!items.length) throw Error('当前没有可抽取的人。');
+  if (!Array.isArray(items) || !items.length || items.length > 0x100000000) throw Error('当前没有可抽取的人。');
   const max = 0x100000000, limit = max - max % items.length, value = new Uint32Array(1);
   do { crypto.getRandomValues(value); } while (value[0] >= limit);
   return items[value[0] % items.length];
+}
+
+export function drawBatch(s, n) {
+  const state = validateState(s);
+  if (!Number.isSafeInteger(n) || n < 1 || n > 500) throw Error('每批人数必须是 1 到 500 的整数。');
+  const q = round(state), pool = eligible(state).map(p => p.no), numbers = [];
+  if (!pool.length) throw Error(q === 2 ? '全班已完成两轮。' : '本轮剩余同学均缺席，等待补齐后继续。');
+  const count = Math.min(n, pool.length);
+  for (let i = 0; i < count; i++) {
+    const no = pick(pool);
+    numbers.push(no);
+    pool.splice(pool.indexOf(no), 1);
+  }
+  for (const student of state.students) if (numbers.includes(student.no)) student.q[q] = true;
+  state.batches.push({ id: crypto.randomUUID(), q, numbers, at: new Date().toISOString() });
+  state.batches = state.batches.slice(-500);
+  return validateState(state);
 }

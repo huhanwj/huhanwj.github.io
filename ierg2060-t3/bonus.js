@@ -1,4 +1,4 @@
-// Only roster numbers cross the data channel. Names and grades stay on the host.
+// Only roster numbers cross the data channel. Names stay on the host.
 export function setupBonus({ container, getEligibleNumbers, onWinner, publicBaseUrl }) {
   if (!container || typeof getEligibleNumbers !== 'function') throw new Error('Bonus draw needs a container and eligible-number provider.');
   let peer = null;
@@ -13,20 +13,20 @@ export function setupBonus({ container, getEligibleNumbers, onWinner, publicBase
   const registrationsByPeer = new Map();
   container.innerHTML = `
     <section class="bonus-panel" aria-labelledby="bonus-title">
-      <div class="bonus-heading"><div><p class="bonus-kicker">VOLUNTEER BONUS</p><h2 id="bonus-title">加分抽奖</h2></div><span class="bonus-count" aria-live="polite">0 人报名</span></div>
-      <p>开启独立报名轮次，学生扫描二维码并填写名册 No.。正式抽奖记录独立保留。</p>
-      <div class="bonus-actions"><button type="button" data-action="open">开启新一轮报名</button><button type="button" data-action="close" disabled>停止报名</button><button type="button" data-action="draw" disabled>抽取 1 位</button></div>
-      <p class="bonus-status" role="status" aria-live="polite">尚未开启。报名与抽奖仅使用当前名册中可参与的 No.。</p>
-      <div class="bonus-share" hidden><div class="bonus-qr" aria-label="学生报名二维码"></div><div><strong>扫描二维码报名</strong><p>教师需保持此页打开。手机连接失败时，可由教师手动添加。</p><a class="bonus-link" target="_blank" rel="noopener">打开报名页</a><button type="button" data-action="copy">复制报名链接</button></div></div>
-      <p class="bonus-network-note">手机连接可能受校园网络限制，失败时请手动添加。编号由学生自报，请教师现场核对。</p>
-      <form class="bonus-manual"><label>手动添加 No. <input name="no" type="text" inputmode="numeric" autocomplete="off" placeholder="例如 12" aria-label="手动添加名册 No." disabled></label><button type="submit" disabled>添加</button></form>
+      <div class="bonus-heading"><div><p class="bonus-kicker">BONUS ROUND</p><h2 id="bonus-title">Volunteer draw</h2></div><span class="bonus-count" aria-live="polite">0 registered</span></div>
+      <div class="bonus-actions"><button type="button" data-action="open">Open registration</button><button type="button" data-action="close" disabled>Close registration</button><button type="button" data-action="draw" disabled>Draw a volunteer</button></div>
+      <p class="bonus-status" role="status" aria-live="polite">Registration is closed.</p>
+      <div class="bonus-share" hidden><div class="bonus-qr" aria-label="Student registration QR code"></div><div><strong>Scan to join</strong><p>Keep this page open while students register.</p><a class="bonus-link" target="_blank" rel="noopener">Open registration page</a><button type="button" data-action="copy">Copy link</button></div></div>
+      <details class="bonus-advanced"><summary>Manual entry and connection help</summary><p class="bonus-network-note">If phone registration is unavailable, add a roster No. here. Students self-report their number; please check it in person.</p>
+      <form class="bonus-manual"><label>Roster No. <input name="no" type="text" inputmode="numeric" autocomplete="off" placeholder="e.g. 12" aria-label="Manually add roster No." disabled></label><button type="submit" disabled>Add</button></form>
       <p class="bonus-manual-status" role="status" aria-live="polite"></p>
-      <ul class="bonus-entrants" aria-label="已报名 No."></ul>
+      </details>
+      <ul class="bonus-entrants" aria-label="Registered roster numbers"></ul>
       <p class="bonus-winner" role="status" aria-live="polite"></p>
-      <div class="bonus-save-recovery" hidden><p class="bonus-save-status" role="alert"></p><button type="button" data-action="retry-save">重试保存同一结果</button><button type="button" data-action="download-result">下载待保存结果</button></div>
+      <div class="bonus-save-recovery" hidden><p class="bonus-save-status" role="alert"></p><button type="button" data-action="retry-save">Retry saving result</button><button type="button" data-action="download-result">Download backup</button></div>
     </section>`;
   const css = document.createElement('style');
-  css.textContent = `.bonus-panel{border:0;border-radius:0;padding:0;background:transparent;color:#253b2f;font-size:13px}.bonus-panel h2{margin:0;font-size:1.5rem}.bonus-panel p{line-height:1.65}.bonus-heading{display:flex;align-items:center;justify-content:space-between;gap:16px}.bonus-kicker{font-size:.72rem;letter-spacing:.12em;margin:0 0 6px;color:#65795e}.bonus-count{white-space:nowrap;color:#315b3f}.bonus-actions{display:flex;flex-wrap:wrap;gap:10px}.bonus-panel button{font:inherit;cursor:pointer;border:1px solid #bacab6;background:#edf2e6;color:#24452f;border-radius:8px;padding:9px 13px}.bonus-panel button:disabled{opacity:.45;cursor:default}.bonus-panel [data-action=draw]{background:#315b3f;color:white}.bonus-status{font-weight:600}.bonus-share{display:flex;gap:22px;align-items:center;padding:18px;background:white;border-radius:12px}.bonus-share[hidden]{display:none}.bonus-qr{flex:0 0 180px;background:white}.bonus-qr svg{width:180px;height:180px;display:block}.bonus-share p{font-size:.85rem;margin:8px 0}.bonus-link{display:block;word-break:break-all;color:#315b3f;margin-bottom:12px}.bonus-network-note{font-size:.82rem;color:#667361}.bonus-manual{display:flex;align-items:end;flex-wrap:wrap;gap:10px}.bonus-manual label{display:flex;gap:10px;align-items:center}.bonus-manual input{font:inherit;width:110px;border:1px solid #bacab6;border-radius:8px;padding:9px;background:white;color:#253b2f}.bonus-manual-status{min-height:1em;font-size:.86rem}.bonus-entrants{display:flex;flex-wrap:wrap;gap:8px;list-style:none;padding:0}.bonus-entrants li{display:flex;align-items:center;gap:8px;padding:5px 8px 5px 12px;border:1px solid #c8d5c0;border-radius:9px;background:white}.bonus-entrants button{padding:2px 7px;min-height:28px}.bonus-winner{font-size:1.3rem;font-weight:700}@media(max-width:550px){.bonus-panel{padding:0}.bonus-share{flex-direction:column;align-items:start}.bonus-heading{align-items:start}.bonus-manual label{flex-wrap:wrap}}`;
+  css.textContent = `.bonus-panel{border:0;border-radius:0;padding:0;background:transparent;color:inherit;font:inherit}.bonus-panel h2{margin:0;font-size:1.5rem}.bonus-panel p{line-height:1.6}.bonus-heading{display:flex;align-items:center;justify-content:space-between;gap:16px}.bonus-kicker{font-size:.72rem;letter-spacing:.14em;margin:0 0 6px;color:#e9a6d8}.bonus-count{white-space:nowrap;color:#f0c5e5}.bonus-actions{display:flex;flex-wrap:wrap;gap:10px}.bonus-panel button{font:inherit;cursor:pointer;border:1px solid #ffffff45;background:#ffffff12;color:inherit;border-radius:9px;padding:9px 13px}.bonus-panel button:disabled{opacity:.45;cursor:default}.bonus-panel [data-action=draw]{background:linear-gradient(120deg,#9c62e8,#e85ca8);border-color:transparent;color:white}.bonus-status{font-weight:600}.bonus-share{display:flex;gap:22px;align-items:center;padding:18px 0;background:transparent}.bonus-share[hidden]{display:none}.bonus-qr{flex:0 0 180px;background:white;padding:8px;border-radius:10px}.bonus-qr svg{width:180px;height:180px;display:block}.bonus-share p{font-size:.9rem;margin:8px 0}.bonus-link{display:block;word-break:break-all;color:#f2b6e1;margin-bottom:12px}.bonus-advanced{margin-top:14px;color:#ffffffb8}.bonus-advanced summary{cursor:pointer;color:#e9a6d8}.bonus-network-note{font-size:.82rem}.bonus-manual{display:flex;align-items:end;flex-wrap:wrap;gap:10px}.bonus-manual label{display:flex;gap:10px;align-items:center}.bonus-manual input{font:inherit;width:110px;border:1px solid #ffffff45;border-radius:8px;padding:9px;background:#ffffff12;color:inherit}.bonus-manual-status{min-height:1em;font-size:.86rem}.bonus-entrants{display:flex;flex-wrap:wrap;gap:8px;list-style:none;padding:0}.bonus-entrants li{display:flex;align-items:center;gap:8px;padding:5px 8px 5px 12px;border:1px solid #ffffff30;border-radius:9px;background:#ffffff0c}.bonus-entrants button{padding:2px 7px;min-height:28px}.bonus-winner{font-size:1.3rem;font-weight:700;color:#f3b6e2}@media(max-width:550px){.bonus-share{flex-direction:column;align-items:start}.bonus-heading{align-items:start}.bonus-manual label{flex-wrap:wrap}}`;
   container.prepend(css);
   const $ = (selector) => container.querySelector(selector);
   const status = $('.bonus-status');
@@ -40,7 +40,7 @@ export function setupBonus({ container, getEligibleNumbers, onWinner, publicBase
   const randomToken = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), (n) => n.toString(16).padStart(2, '0')).join('');
   const send = (connection, payload) => { try { if (connection.open) connection.send(payload); } catch { /* A disconnected phone does not remove its registration. */ } };
   function render() {
-    $('.bonus-count').textContent = `${entrants.size} 人报名`;
+    $('.bonus-count').textContent = `${entrants.size} registered`;
     $('[data-action="open"]').disabled = !!pendingRecord;
     $('[data-action="retry-save"]').disabled = saving;
     $('[data-action="close"]').disabled = !open;
@@ -54,7 +54,7 @@ export function setupBonus({ container, getEligibleNumbers, onWinner, publicBase
       const remove = document.createElement('button');
       remove.type = 'button';
       remove.textContent = '×';
-      remove.setAttribute('aria-label', `移除 No. ${no}`);
+      remove.setAttribute('aria-label', `Remove No. ${no}`);
       remove.disabled = drawn;
       remove.addEventListener('click', () => { entrants.delete(no); render(); });
       item.append(label, remove);
@@ -82,7 +82,7 @@ export function setupBonus({ container, getEligibleNumbers, onWinner, publicBase
   }
   function close() {
     stopNetwork('Registration has closed. Your accepted registration stays in the draw.');
-    if (round && !drawn) status.textContent = '报名已停止，已报名者仍可参与本轮抽奖。';
+    if (round && !drawn) status.textContent = 'Registration is closed. Existing entries remain in this round.';
   }
   function reset() {
     if (pendingRecord) return false;
@@ -95,7 +95,7 @@ export function setupBonus({ container, getEligibleNumbers, onWinner, publicBase
     $('.bonus-save-recovery').hidden = true;
     $('.bonus-manual input').value = '';
     manualStatus.textContent = '';
-    status.textContent = '尚未开启。报名与抽奖仅使用当前名册中可参与的 No.。';
+    status.textContent = 'Registration is closed.';
     render();
     return true;
   }
@@ -110,29 +110,29 @@ export function setupBonus({ container, getEligibleNumbers, onWinner, publicBase
     manualStatus.textContent = '';
     $('.bonus-winner').textContent = '';
     $('.bonus-save-recovery').hidden = true;
-    status.textContent = '报名已开启，正在连接手机报名服务。也可手动添加 No.。';
+    status.textContent = 'Registration is open. Connecting to the student sign-up service…';
     render();
-    if (typeof globalThis.Peer !== 'function') { status.textContent = '手机报名服务未加载。报名已开启，请手动添加 No.。'; return; }
+    if (typeof globalThis.Peer !== 'function') { status.textContent = 'Registration is open, but phone sign-up is unavailable. Use manual entry in the help section.'; return; }
     const activeRound = round;
     const room = `ierg2060-${randomToken()}`;
     let currentPeer;
     try { currentPeer = new globalThis.Peer(room); peer = currentPeer; }
-    catch { status.textContent = '手机报名服务连接失败，请手动添加 No.。'; return; }
+    catch { status.textContent = 'Phone sign-up could not connect. Use manual entry in the help section.'; return; }
     currentPeer.on('open', () => {
       if (!open || round !== activeRound || currentPeer !== peer) return;
       online = true;
       const url = new URL('join.html', publicBaseUrl || new URL('./', location.href));
       url.hash = `room=${encodeURIComponent(room)}&round=${encodeURIComponent(round)}`;
       $('.bonus-link').href = url.href;
-      $('.bonus-link').textContent = '打开学生报名页 ↗';
+      $('.bonus-link').textContent = 'Open registration page ↗';
       $('.bonus-qr').replaceChildren();
       if (typeof globalThis.qrcode === 'function') {
         const qr = globalThis.qrcode(0, 'M');
         qr.addData(url.href); qr.make();
         $('.bonus-qr').innerHTML = qr.createSvgTag({ scalable: true, margin: 8 });
-      } else $('.bonus-qr').textContent = '二维码未加载，请复制报名链接。';
+      } else $('.bonus-qr').textContent = 'QR code unavailable. Copy the registration link.';
       $('.bonus-share').hidden = false;
-      status.textContent = '报名已开启。学生可扫描二维码或打开报名链接。';
+      status.textContent = 'Registration is open. Students can scan the QR code or open the link.';
     });
     currentPeer.on('connection', (connection) => {
       if (currentPeer !== peer || activeRound !== round) { connection.close(); return; }
@@ -156,12 +156,12 @@ export function setupBonus({ container, getEligibleNumbers, onWinner, publicBase
     const failed = () => {
       if (currentPeer !== peer || !open || activeRound !== round) return;
       online = false;
-      status.textContent = '手机报名连接中断或不可用。已接受的报名保留；请手动添加 No.，或开启新一轮重新连接。';
+      status.textContent = 'Phone sign-up is unavailable. Accepted entries are kept; use manual entry or start a new round.';
     };
     currentPeer.on('error', failed);
     currentPeer.on('disconnected', failed);
     setTimeout(() => {
-      if (currentPeer === peer && open && !online) status.textContent = '手机报名连接超时。请手动添加 No.，或开启新一轮重新连接。';
+      if (currentPeer === peer && open && !online) status.textContent = 'Phone sign-up timed out. Use manual entry or start a new round.';
     }, 15000);
   }
   function draw() {
@@ -170,7 +170,7 @@ export function setupBonus({ container, getEligibleNumbers, onWinner, publicBase
     let removed = 0;
     for (const no of entrants) if (!valid.has(no)) { entrants.delete(no); removed++; }
     const pool = Array.from(entrants).sort((a, b) => a - b);
-    if (!pool.length) { status.textContent = '本轮没有符合当前参与条件的报名者。'; render(); return; }
+    if (!pool.length) { status.textContent = 'There are no eligible entries in this round.'; render(); return; }
     // Rejection sampling avoids modulo bias in the selected index.
     const limit = Math.floor(0x100000000 / pool.length) * pool.length;
     const values = new Uint32Array(1);
@@ -178,8 +178,8 @@ export function setupBonus({ container, getEligibleNumbers, onWinner, publicBase
     const no = pool[values[0] % pool.length];
     drawn = true;
     stopNetwork('This bonus round has ended.');
-    status.textContent = `本轮已锁定，共 ${pool.length} 位参与者。${removed ? `已移除 ${removed} 位不再符合当前条件的报名者。` : ''}`;
-    $('.bonus-winner').textContent = `加分抽奖结果 · No. ${no}`;
+    status.textContent = `Round complete · ${pool.length} ${pool.length === 1 ? 'entry' : 'entries'}${removed ? ` · ${removed} ineligible ${removed === 1 ? 'entry was' : 'entries were'} removed` : ''}`;
+    $('.bonus-winner').textContent = `Selected volunteer · No. ${no}`;
     pendingRecord = { no, round, entrants: pool, drawnAt: new Date().toISOString() };
     saveResult();
   }
@@ -195,7 +195,7 @@ export function setupBonus({ container, getEligibleNumbers, onWinner, publicBase
       $('.bonus-save-recovery').hidden = true;
     } catch {
       $('.bonus-save-recovery').hidden = false;
-      $('.bonus-save-status').textContent = '结果尚未保存到历史记录。此结果已保留且不会重新抽取；请重试保存，或先下载结果备份。保存成功前不能开启新一轮。';
+      $('.bonus-save-status').textContent = 'This result has not been saved. It is preserved and will not be drawn again. Retry saving or download a backup before starting another round.';
     } finally { saving = false; render(); }
   }
   $('[data-action="open"]').addEventListener('click', start);
@@ -212,14 +212,14 @@ export function setupBonus({ container, getEligibleNumbers, onWinner, publicBase
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
   $('[data-action="copy"]').addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText($('.bonus-link').href); manualStatus.textContent = '报名链接已复制。'; }
-    catch { manualStatus.textContent = '复制失败，请从“打开学生报名页”链接复制地址。'; }
+    try { await navigator.clipboard.writeText($('.bonus-link').href); manualStatus.textContent = 'Registration link copied.'; }
+    catch { manualStatus.textContent = 'Copy failed. Copy the address from the registration link.'; }
   });
   $('.bonus-manual').addEventListener('submit', (event) => {
     event.preventDefault();
     const input = $('.bonus-manual input');
     const result = join(input.value, round);
-    manualStatus.textContent = result.status === 'joined' ? `No. ${result.no} 已报名（重复报名只计一次）。` : result.status === 'closed' ? '当前报名已关闭。' : '请输入完整数字 No.，且该 No. 必须在当前可参与名册中。';
+    manualStatus.textContent = result.status === 'joined' ? `No. ${result.no} registered. Duplicate entries count once.` : result.status === 'closed' ? 'Registration is closed.' : 'Enter a valid roster No. from the current eligible roster.';
     if (result.status === 'joined') input.value = '';
   });
   render();
