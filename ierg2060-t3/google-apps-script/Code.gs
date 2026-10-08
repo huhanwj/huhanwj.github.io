@@ -44,6 +44,16 @@ function setup_() {
 }
 
 function doGet(e) {
+  if (e && e.parameter && Object.prototype.hasOwnProperty.call(e.parameter, 'login')) {
+    authenticate_();
+    const state = loginState_(e.parameter.login);
+    const code = loginSecret_();
+    const grant = {state:state,email:ADMIN_EMAIL_,expiresAt:Date.now()+300000};
+    CacheService.getScriptCache().put(loginCacheKey_('grant', code), JSON.stringify(grant), 300);
+    const template = HtmlService.createTemplateFromFile('SignIn');
+    template.continueUrl = 'https://huhanwj.github.io/ierg2060-t3/auth-callback.html#code=' + code + '&state=' + state;
+    return template.evaluate().setTitle('IERG2060 sign in').addMetaTag('viewport', 'width=device-width, initial-scale=1');
+  }
   if (!e || !e.parameter || !e.parameter.channel) {
     authenticate_();
     return HtmlService.createHtmlOutput('<p>Google account confirmed. Return to the draw page and click Connect Google Sheets.</p>').setTitle('IERG2060 administrator');
@@ -54,12 +64,13 @@ function doGet(e) {
   return template.evaluate().setTitle('IERG2060 cloud connection').setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
-function rpc(action, payload) {
+function rpc(action, payload, sessionToken) {
   if (payload === undefined || payload === null) payload = {};
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw Error('Invalid cloud request.');
   const publicAction = action === 'bonusJoin' || action === 'bonusInfo';
   if (publicAction) return publicRpc_(action, payload);
-  const email = authenticate_();
+  if (action === 'exchangeLogin') return exchangeLogin_(payload);
+  const email = sessionToken === undefined ? authenticate_() : authenticateSession_(sessionToken);
   if (Object.prototype.hasOwnProperty.call(payload, 'adminKey') || Object.prototype.hasOwnProperty.call(payload, 'email')) throw Error('Account credentials must not be supplied in a cloud request.');
   if (action === 'auth') return {ok:true,email:email};
   if (action === 'names') return locked_(function () {return Object.assign({roster:roster_()}, ownerMetadata_(read_()));});
@@ -161,6 +172,48 @@ function rpc(action, payload) {
     if (reportsWarning) result.reportsWarning=reportsWarning;
     return result;
   });
+}
+
+function loginState_(state) {
+  if (typeof state !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(state)) throw Error('Invalid sign-in request.');
+  return state;
+}
+function loginSecret_() {
+  return (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, '').toLowerCase();
+}
+function loginCacheKey_(kind, secret) {
+  // Raw grants and session tokens never appear in cache keys or stored draws.
+  return 'login:' + kind + ':' + digest_({kind:kind,secret:secret});
+}
+function exchangeLogin_(payload) {
+  const invalid = () => {throw Error('Invalid sign-in grant. Sign in again.');};
+  if (Object.keys(payload).length !== 2 || Object.keys(payload).some(key => !['code','state'].includes(key)) || typeof payload.code !== 'string' || !/^[a-f0-9]{64}$/.test(payload.code)) invalid();
+  try {loginState_(payload.state);} catch (error) {invalid();}
+  return locked_(function () {
+    const cache = CacheService.getScriptCache(), key = loginCacheKey_('grant', payload.code);
+    let grant;
+    try {grant=JSON.parse(cache.get(key) || 'null');} catch (error) {invalid();}
+    const now = Date.now();
+    if (!grant || grant.email !== ADMIN_EMAIL_ || grant.state !== payload.state || !Number.isFinite(grant.expiresAt) || grant.expiresAt <= now) invalid();
+    // Bind each grant to one session. Repeating the exact exchange recovers its
+    // receipt during the original five-minute grant window without extending it.
+    if (!grant.token) {
+      grant.token=loginSecret_();
+      grant.sessionExpiresAt=now+7200000;
+      cache.put(key, JSON.stringify(grant), Math.max(1, Math.ceil((grant.expiresAt-now)/1000)));
+    }
+    if (!/^[a-f0-9]{64}$/.test(grant.token) || !Number.isFinite(grant.sessionExpiresAt) || grant.sessionExpiresAt <= now) invalid();
+    cache.put(loginCacheKey_('session', grant.token), JSON.stringify({email:ADMIN_EMAIL_,expiresAt:grant.sessionExpiresAt}), Math.max(1, Math.ceil((grant.sessionExpiresAt-now)/1000)));
+    return {token:grant.token,expiresAt:grant.sessionExpiresAt,email:ADMIN_EMAIL_};
+  });
+}
+function authenticateSession_(sessionToken) {
+  const denied = () => {throw Error('Your sign-in session expired. Sign in again.');};
+  if (typeof sessionToken !== 'string' || !/^[a-f0-9]{64}$/.test(sessionToken)) denied();
+  let session;
+  try {session=JSON.parse(CacheService.getScriptCache().get(loginCacheKey_('session', sessionToken)) || 'null');} catch (error) {denied();}
+  if (!session || session.email !== ADMIN_EMAIL_ || !Number.isFinite(session.expiresAt) || session.expiresAt <= Date.now()) denied();
+  return session.email;
 }
 
 function publicRpc_(action, payload) {

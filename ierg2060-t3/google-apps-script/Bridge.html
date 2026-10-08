@@ -8,9 +8,12 @@ window.addEventListener('message', event => {
   const data = event.data;
   if (event.source !== window.top || !allowed(event.origin) || !data || data.type !== 'ierg-rpc' || data.channel !== channel || typeof data.id !== 'string' || data.id.length > 200 || typeof data.action !== 'string') return;
   const reply = (result, error) => window.top.postMessage({type:'ierg-rpc-result',channel,id:data.id,result,error}, event.origin);
-  google.script.run.withSuccessHandler(result => reply(result, null))
-    .withFailureHandler(error => reply(null, error.message || 'Cloud request failed.'))
-    .rpc(data.action, data.payload || {});
+  const hasSession = Object.prototype.hasOwnProperty.call(data, 'sessionToken');
+  if (hasSession && (typeof data.sessionToken !== 'string' || !/^[a-f0-9]{64}$/.test(data.sessionToken))) {reply(null, 'Your sign-in session expired. Sign in again.');return;}
+  const runner = google.script.run.withSuccessHandler(result => reply(result, null))
+    .withFailureHandler(error => reply(null, error.message || 'Cloud request failed.'));
+  if (hasSession) runner.rpc(data.action, data.payload || {}, data.sessionToken);
+  else runner.rpc(data.action, data.payload || {});
 });
 // The Apps Script HTML lives inside Google's wrapper iframe.
 window.top.postMessage({type:'ierg-ready',channel}, '*');

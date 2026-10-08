@@ -1,12 +1,13 @@
 import {fromSheet, validateState, migrateState, mergeRoster, round, eligible, parseAbsent, drawBatch} from './core.js?v=8';
 import {setupBonus} from './bonus.js?v=6';
 import {setupCloudBonus} from './cloud-bonus.js?v=9';
-import {createCloudClient, cloudEndpoint} from './cloud.js?v=8';
+import {createCloudClient, cloudEndpoint} from './cloud.js?v=9';
+import {readSession, beginSignIn, cancelSignIn, clearSession} from './auth.js?v=1';
 import {cloudDefaults} from './cloud-config.js?v=7';
 
 const KEY='ierg2060-t3-v2', OLD_KEY='ierg2060-t3-v1', CLOUD='ierg2060-t3-cloud', LEGACY_SECRET='ierg2060-t3-cloud-key', PENDING='ierg2060-t3-pending', ANSWER='ierg2060-t3-answer', MINUTES='ierg2060-t3-minutes', LOCAL_ATTENDANCE='ierg2060-t3-attendance';
 const $=id=>document.getElementById(id);
-let state=null,incoming=null,bonus=null,writable=false,busy=false,cloud=null,endpoint='',studentEndpoint='',revision=0,connected=false,connecting=false,pending=null,initial=null,sourceInitial=null,draft=null,absenceText=null,attendance=[],batchDates={},sessionDate=today(),recordsWarning="",revealing=false,questionText=null,answer=null,timerInterval=null;
+let state=null,incoming=null,bonus=null,writable=false,busy=false,cloud=null,endpoint='',studentEndpoint='',revision=0,connected=false,connecting=false,signingIn=false,pending=null,initial=null,sourceInitial=null,draft=null,absenceText=null,attendance=[],batchDates={},sessionDate=today(),recordsWarning="",revealing=false,questionText=null,answer=null,timerInterval=null;
 function today(){const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());return ['year','month','day'].map(key=>parts.find(p=>p.type===key).value).join('-');}
 function validDate(value){return typeof value==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(value+'T00:00:00Z'))&&new Date(value+'T00:00:00Z').toISOString().slice(0,10)===value;}
 function selectedAttendance(){return attendance.find(row=>row.date===sessionDate);}
@@ -28,7 +29,13 @@ function cloudState(result){
   $('records-warning').textContent=recordsWarning;$('records-warning').hidden=!recordsWarning;
   render();$('cloud-status').textContent=recordsWarning||'Saved in Google Sheets.';
 }
-async function call(action,payload={}){if(!cloud||!connected)throw Error('Connect Google Sheets in Draw settings.');return cloud.call(action,payload);}
+function expireSession(error){
+  if(error.serverConfirmed&&/Your sign-in session expired/.test(error.message)){clearSession();connected=false;$('cloud-account').textContent='Sign in again to continue.';controls();}
+}
+async function call(action,payload={}){
+  if(!cloud||!connected)throw Error('Sign in with Google to continue.');
+  try{return await cloud.call(action,payload);}catch(error){expireSession(error);throw error;}
+}
 async function flushPending(){
   if(!pending)return;
   let result;try{result=await call(pending.action||'save',pending);}catch(error){
@@ -112,10 +119,11 @@ function controls(){
   $('choose-file').disabled=locked||!!endpoint;$('confirm-import').disabled=locked||!!endpoint;
   $('connection-panel').hidden=!endpoint||connected;
   $('connect-main').disabled=busy||connecting||revealing||!writable;
-  $('connect-main').textContent=connecting?'Connecting…':'Connect';
-  $('connection-status').textContent=connecting?'Connecting to Google Sheets…':'Sign in in the new tab, then return here and click Connect.';
+  $('connect-main').textContent=signingIn?'Waiting for Google…':connecting?'Connecting…':readSession()?'Reconnect':'Sign in with Google';
+  $('sign-in-cancel').hidden=!signingIn;
+  $('connection-status').textContent=signingIn?'Complete sign-in in the Google window and click Continue. This page will connect automatically.':connecting?'Loading class records…':'Sign in to load this class. The draw stays on this page.';
   $('cloud-form').querySelector('button').disabled=busy||connecting||revealing||!writable;
-  $('cloud-form').querySelector('button').textContent=connecting?'Connecting…':connected?'Reconnect':'Connect';
+  $('cloud-form').querySelector('button').textContent=signingIn?'Waiting for Google…':connecting?'Connecting…':readSession()?'Reconnect':'Sign in with Google';
   $('cloud-refresh').hidden=!connected;$('cloud-refresh').disabled=busy||revealing;
   $('cloud-names').hidden=!connected;$('cloud-names').disabled=locked||!!draft;
   $('cloud-retry').hidden=!pending;$('cloud-retry').disabled=busy||!connected;
@@ -151,7 +159,7 @@ function render(){
   $('round-label').textContent=!revealing&&(draft||answer||pending?.action==='save')?'ANSWER TIME':'THIS DRAW';
   $('deck-caption').textContent=revealing?'Drawing…':batch?`${batch.numbers.length} ${batch.numbers.length===1?'student':'students'} selected${draft?' · Preview':pending?' · Save not confirmed':''}`:'';
   previewResults(batch?.numbers,batch?.questionStart||1);controls();
-  if(!state)notice(connecting?'Connecting to Google Sheets…':endpoint?'Sign in with Google, then click Connect.':'Connecting to Google Sheets…');
+  if(!state)notice(connecting?'Connecting to Google Sheets…':endpoint?'Sign in with Google to load this class.':'Connecting to Google Sheets…');
   else if(!draft&&!pending&&round(state)===2)notice('Both participation rounds are complete.');
   else if(!draft&&!pending&&!eligible({...state,absent:absentInput()||[]}).length)notice('The remaining students in this round are absent. This round stays open.');
 }
@@ -244,12 +252,7 @@ async function loadCloud(loaded){
   }
   else{revision=result.revision;sourceInitial=validateState({version:2,students:result.roster,absent:[],batches:[],bonus:[]});initial=state?mergeRoster(state,result.roster):sourceInitial;$('cloud-status').textContent=`Cloud has no records yet. Start with ${initial.students.length} students and ${initial.batches.length} saved batches from this browser${state?'':' / the source sheet'}.`;}
 }
-function updateLoginLink(){
-  try{const url=cloudEndpoint($('cloud-url').value.trim());$('cloud-login').href=url;$('sign-in-main').href=url;$('cloud-login').hidden=false;}
-  catch{$('cloud-login').removeAttribute('href');$('cloud-login').hidden=true;}
-}
-$('cloud-url').oninput=updateLoginLink;
-async function connectOwner(){
+async function connectOwner(signIn=false){
   if(connecting)return;
   const adminUrl=cloudEndpoint($('cloud-url').value.trim()),publicUrl=cloudEndpoint($('student-url').value.trim());
   if(cloudDefaults && (adminUrl!==cloudDefaults.admin || publicUrl!==cloudDefaults.student))throw Error('Use the configured class connection.');
@@ -259,19 +262,27 @@ async function connectOwner(){
   connecting=true;connected=false;cloud?.destroy();cloud=null;controls();
   let proposed;
   try{
-    proposed=createCloudClient(adminUrl);
+    proposed=createCloudClient(publicUrl,{getSessionToken:()=>readSession()?.token??null});
+    if(signIn){
+      signingIn=true;controls();
+      // Open synchronously in the button click, before the bridge is awaited.
+      await beginSignIn(adminUrl,payload=>proposed.call('exchangeLogin',payload,{anonymous:true}));
+      signingIn=false;controls();
+    }
+    if(!readSession())throw Error('Sign in with Google to load this class.');
     const account=await proposed.call('auth'),result=await proposed.call('load');
     cloud=proposed;endpoint=adminUrl;studentEndpoint=publicUrl;connected=true;
     $('cloud-account').textContent=`Google account: ${account.email}`;
     await loadCloud(result);
     localStorage.setItem(CLOUD,JSON.stringify({admin:endpoint,student:studentEndpoint}));sessionStorage.removeItem(LEGACY_SECRET);
     installBonus();await bonus?.refresh?.();notice('');
-  }catch(error){proposed?.destroy();cloud=null;connected=false;throw error;}
-  finally{connecting=false;controls();}
+  }catch(error){proposed?.destroy();cloud=null;connected=false;expireSession(error);throw error;}
+  finally{signingIn=false;connecting=false;controls();}
 }
-const connectFromButton=handle(()=>exclusive(connectOwner));
+const connectFromButton=handle(()=>exclusive(()=>connectOwner(!readSession())));
 $('cloud-form').onsubmit=connectFromButton;
 $('connect-main').onclick=connectFromButton;
+$('sign-in-cancel').onclick=()=>cancelSignIn();
 $('cloud-initialize').onclick=handle(()=>exclusive(async()=>{if(!initial)return;const next=initial;initial=null;try{await save(next,'initialize');}catch(error){throw error;}installBonus();notice('');render();}));
 $('cloud-source-initialize').onclick=handle(()=>exclusive(async()=>{if(!sourceInitial)return;const next=sourceInitial;initial=null;sourceInitial=null;await save(next,'initialize');installBonus();notice('');render();}));
 $('cloud-retry').onclick=handle(()=>exclusive(async()=>{const drawPending=pending?.action==='save';await flushPending();if(drawPending){questionText=null;if(answerBatch()&&!answer.deadline)startTimer();}absenceText=null;notice('');render();}));
@@ -294,10 +305,10 @@ async function activate(){
     }
     const lastMinutes=Number(localStorage.getItem(MINUTES));if(Number.isInteger(lastMinutes)&&lastMinutes>=1&&lastMinutes<=180)$('answer-minutes').value=lastMinutes;
     restoreAnswer();
-    $('cloud-url').value=endpoint;$('student-url').value=studentEndpoint;updateLoginLink();
+    $('cloud-url').value=endpoint;$('student-url').value=studentEndpoint;
     if(endpoint){
       $('cloud-status').textContent='Sign in with the authorized Google account to resume.';
-      if(studentEndpoint){if(saved||legacy||localStorage.getItem(CLOUD)||pending)await connectOwner();}
+      if(studentEndpoint){if(readSession())await connectOwner();}
       else notice('Set the separate administrator and student URLs in Draw settings.');
     }else{attendance=JSON.parse(localStorage.getItem(LOCAL_ATTENDANCE)||'[]');installBonus();}
     if(answer&&!pending&&!answerBatch())clearAnswer();

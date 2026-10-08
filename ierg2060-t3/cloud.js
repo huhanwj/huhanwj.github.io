@@ -5,7 +5,7 @@ export function cloudEndpoint(value) {
   return `${url.origin}${url.pathname}`;
 }
 
-export function createCloudClient(value) {
+export function createCloudClient(value,{getSessionToken}={}) {
   const endpoint=cloudEndpoint(value),url=new URL(endpoint),channel=crypto.randomUUID();
   url.search = new URLSearchParams({channel}).toString(); url.hash = '';
   const frame = document.createElement('iframe');
@@ -15,7 +15,7 @@ export function createCloudClient(value) {
   const ready = new Promise((resolve,reject)=>{readyResolve=resolve;readyReject=reject;});
   // A rejected connection is surfaced by call(), even if loading finishes first.
   ready.catch(()=>{});
-  const timer = setTimeout(()=>stop(Error('Google sign-in did not finish. Click Sign in with Google, sign in with the instructor account, then return and click Connect. If already signed in, open the sign-in link to check account access.')),30000);
+  const timer = setTimeout(()=>stop(Error('The Google Sheets service did not respond. Check your connection and retry. This is a connection error, not a Google sign-in result.')),30000);
   function stop(error) {
     if(stopped)return;
     stopped=true;stopError=error;clearTimeout(timer);readyReject(error);
@@ -35,7 +35,7 @@ export function createCloudClient(value) {
     else request.resolve(data.result);
   }
   window.addEventListener('message',receive);document.body.append(frame);
-  return {endpoint,async call(action,payload={}) {
+  return {endpoint,async call(action,payload={}, {anonymous=false}={}) {
     if(stopped)throw stopError;
     await ready;
     if(stopped)throw stopError;
@@ -43,7 +43,7 @@ export function createCloudClient(value) {
     return new Promise((resolve,reject)=>{
       const timer=setTimeout(()=>{pending.delete(id);reject(Error('No confirmation from Google Sheets. Retry to check the same request.'));},30000);
       pending.set(id,{resolve,reject,timer});
-      try{source.postMessage({type:'ierg-rpc',channel,id,action,payload},origin);}
+      try{const message={type:'ierg-rpc',channel,id,action,payload};if(getSessionToken&&!anonymous)message.sessionToken=getSessionToken();source.postMessage(message,origin);}
       catch(error){pending.delete(id);clearTimeout(timer);reject(error);}
     });
   },destroy(){stop(Error('Google Sheets connection closed.'));}};
