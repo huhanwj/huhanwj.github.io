@@ -117,8 +117,11 @@ if (!testMode && params.has('round') && !params.has('cloud')) {
           return;
         } catch (error) {
           if (!isCurrent()) return;
-          report('attempt', {no,requestId,attemptNumber:number+1,rpcMs:performance.now()-rpcStartedAt,success:false,serverBusy:error.serverConfirmed && transientMessages.has(error.message),message:error.message});
-          const transient = !error.invalidResult && (!error.serverConfirmed || transientMessages.has(error.message));
+          // Apps Script may prefix its server exception text with 'Error:'.
+          const serverMessage = String(error.message || '').replace(/^(?:Error:\s*)+/, '').trim();
+          const knownTransient = transientMessages.has(serverMessage);
+          report('attempt', {no,requestId,attemptNumber:number+1,rpcMs:performance.now()-rpcStartedAt,success:false,serverBusy:error.serverConfirmed && knownTransient,message:error.message});
+          const transient = !error.invalidResult && (!error.serverConfirmed || knownTransient);
           reconnect = !error.serverConfirmed;
           if (transient && number + 1 < maxAttempts) {
             show(`No confirmation yet for No. ${no}. Retrying the same registration (${number + 2}/${maxAttempts})…`);
