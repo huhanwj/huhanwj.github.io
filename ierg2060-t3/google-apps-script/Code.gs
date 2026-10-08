@@ -1,5 +1,4 @@
 /* Private, owner-executed persistence. Setup requires the signed-in owner. */
-const SOURCE_ID_ = '1_i5yaOroKaS4I0wgp5NYtLNmpHnwMHYdwUjviUnwUIs';
 const SOURCE_GID_ = 521726463;
 const ADMIN_EMAIL_ = 'huhanwj@gmail.com';
 
@@ -55,10 +54,11 @@ function doGet(e) {
 }
 
 function rpc(action, payload) {
-  payload = payload || {};
+  if (payload === undefined || payload === null) payload = {};
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw Error('Invalid cloud request.');
   const publicAction = action === 'bonusJoin' || action === 'bonusInfo';
-  const email = publicAction ? null : authenticate_();
+  if (publicAction) return publicRpc_(action, payload);
+  const email = authenticate_();
   if (Object.prototype.hasOwnProperty.call(payload, 'adminKey') || Object.prototype.hasOwnProperty.call(payload, 'email')) throw Error('Account credentials must not be supplied in a cloud request.');
   if (action === 'auth') return {ok:true,email:email};
   if (action === 'names') return {roster:roster_()};
@@ -69,15 +69,10 @@ function rpc(action, payload) {
       return {state:document.state,revision:document.revision,roster:roster};
     });
   }
-  if (action === 'bonusInfo') return locked_(function () {
-    const room = requireRoom_(read_(), payload.room);
-    return {id:room.id,open:room.open,winner:room.winner};
-  });
   if (action === 'bonusStatus') return locked_(function () {return {room:read_().room};});
-  if (!['initialize','save','bonusOpen','bonusClose','bonusDraw','bonusReset','bonusJoin','bonusRemove'].includes(action)) throw Error('Unknown cloud action.');
+  if (!['initialize','save','bonusOpen','bonusClose','bonusDraw','bonusReset','bonusRemove'].includes(action)) throw Error('Unknown cloud action.');
   return locked_(function () {
     const document = read_();
-    if (action === 'bonusJoin') return join_(document, payload);
     const requestId = token_(payload.requestId, 'A requestId is required.');
     const fingerprint = digest_({action:action,payload:Object.keys(payload).sort().reduce((o,k) => {o[k]=payload[k];return o;}, {})});
     const prior = document.requests.find(r => r.id === requestId);
@@ -144,12 +139,51 @@ function rpc(action, payload) {
   });
 }
 
+function publicRpc_(action, payload) {
+  // Reject malformed requests before touching the shared lock or spreadsheet.
+  const request = publicPayload_(action, payload);
+  try {
+    return locked_(function () {
+      const document = read_();
+      if (action === 'bonusJoin') return join_(document, request);
+      const room = requireRoom_(document, request.room);
+      return {id:room.id,open:room.open};
+    });
+  } catch (error) {
+    const expected = [
+      'This Bonus link has expired. Ask for the latest QR code.',
+      'Bonus registration is closed.',
+      'This roster No. cannot join. Check with the instructor.',
+      'The cloud service is busy. Retry the same request.'
+    ];
+    if (error && expected.includes(error.message)) throw Error(error.message);
+    console.error('Public registration failed: ' + (error && error.stack || String(error)));
+    throw Error('Registration service unavailable. Retry or check with the instructor.');
+  }
+}
+function publicPayload_(action, payload) {
+  const invalid = () => {throw Error('Invalid registration request.');};
+  const allowed = action === 'bonusJoin' ? ['room','no','requestId'] : ['room'];
+  if (Object.keys(payload).some(key => !allowed.includes(key))) invalid();
+  if (typeof payload.room !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(payload.room)) invalid();
+  if (action === 'bonusInfo') return {room:payload.room};
+  const no = typeof payload.no === 'string' && /^\d{1,16}$/.test(payload.no) ? Number(payload.no) : payload.no;
+  if (!Number.isSafeInteger(no) || no < 1) invalid();
+  if (Object.prototype.hasOwnProperty.call(payload, 'requestId') && (typeof payload.requestId !== 'string' || !payload.requestId.trim() || payload.requestId.length > 200)) invalid();
+  return {room:payload.room,no:no};
+}
 function authenticate_() {
   // An owner-executed public deployment has the owner's effective identity even
   // for anonymous callers. Only the server's active user identifies the caller.
-  const active = Session.getActiveUser().getEmail();
-  const effective = Session.getEffectiveUser().getEmail();
-  if (active !== ADMIN_EMAIL_ || effective !== ADMIN_EMAIL_) throw Error('Sign in to Google as ' + ADMIN_EMAIL_ + ' and open the private admin connection.');
+  let active, effective;
+  try {
+    active = Session.getActiveUser().getEmail();
+    effective = Session.getEffectiveUser().getEmail();
+  } catch (error) {
+    console.error('Administrator identity check failed: ' + (error && error.stack || String(error)));
+    throw Error('Administrator access denied. Use the authorized Google account.');
+  }
+  if (active !== ADMIN_EMAIL_ || effective !== ADMIN_EMAIL_) throw Error('Administrator access denied. Use the authorized Google account.');
   return active;
 }
 function locked_(fn) {
@@ -190,16 +224,17 @@ function join_(document, payload) {
   const room = requireRoom_(document, payload.room);
   const no = typeof payload.no === 'string' && /^\d+$/.test(payload.no) ? Number(payload.no) : payload.no;
   // A retry can recover an accepted receipt even after registration closes.
-  if (room.entrants.includes(no)) return {status:'joined',no:no,duplicate:true};
+  if (room.entrants.includes(no)) return {status:'joined',no:no};
   if (!room.open || room.winner) throw Error('Bonus registration is closed.');
   if (!Number.isSafeInteger(no) || !document.state.students.some(p => p.no === no) || room.absent.includes(no) || document.state.absent.includes(no)) throw Error('This roster No. cannot join. Check with the instructor.');
-  const duplicate = room.entrants.includes(no);
-  if (!duplicate) {room.entrants.push(no);room.entrants.sort((a,b) => a-b);write_(document);}
-  return {status:'joined',no:no,duplicate:duplicate};
+  room.entrants.push(no);room.entrants.sort((a,b) => a-b);write_(document);
+  return {status:'joined',no:no};
 }
 
 function sourceRoster_() {
-  const sheet = SpreadsheetApp.openById(SOURCE_ID_).getSheets().find(s => s.getSheetId() === SOURCE_GID_);
+  const sourceId = PropertiesService.getScriptProperties().getProperty('SOURCE_ID');
+  if (!sourceId || !/^[A-Za-z0-9_-]{10,200}$/.test(sourceId)) throw Error('Set the SOURCE_ID script property before creating the roster snapshot.');
+  const sheet = SpreadsheetApp.openById(sourceId).getSheets().find(s => s.getSheetId() === SOURCE_GID_);
   if (!sheet) throw Error('Tutorial 3 source worksheet was not found.');
   // Header cells only; the Student ID column is never read below the header.
   const firstColumn = sheet.getRange(1,1,Math.min(10,sheet.getLastRow()),1).getDisplayValues();

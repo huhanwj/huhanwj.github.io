@@ -3,7 +3,7 @@
 <script>
 'use strict';
 const channel = <?!= JSON.stringify(channel) ?>;
-const allowed = origin => origin === 'https://huhanwj.github.io' || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+const allowed = origin => origin === 'https://huhanwj.github.io';
 window.addEventListener('message', event => {
   const data = event.data;
   if (event.source !== window.top || !allowed(event.origin) || !data || data.type !== 'ierg-rpc' || data.channel !== channel || typeof data.id !== 'string' || data.id.length > 200 || typeof data.action !== 'string') return;

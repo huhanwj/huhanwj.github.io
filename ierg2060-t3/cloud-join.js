@@ -1,7 +1,8 @@
 import {createCloudClient} from './cloud.js?v=7';
+import {cloudDefaults} from './cloud-config.js?v=7';
 
 const params = new URLSearchParams(location.hash.slice(1));
-if (!params.has('cloud')) {
+if (params.has('round') && !params.has('cloud')) {
   // Existing PeerJS links still use the original registration flow.
   await import('./join.js?v=2');
 } else {
@@ -10,7 +11,8 @@ if (!params.has('cloud')) {
   const button = document.getElementById('join-button');
   const retry = document.getElementById('retry-button');
   const status = document.getElementById('status');
-  const endpoint = params.get('cloud');
+  // Registration links cannot select a different Apps Script deployment.
+  const endpoint = cloudDefaults.student;
   const room = params.get('room');
   let client = null;
   let busy = false;

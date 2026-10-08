@@ -60,7 +60,7 @@ export function setupCloudBonus({container, call, endpoint, getAbsent, getStuden
     $('.bonus-share').hidden = !room?.open || !endpointUrl;
     if (room?.open && endpointUrl && shareKey !== `${endpointUrl}|${room.id}`) {
       const url = new URL('join.html', publicBaseUrl || new URL('./', location.href));
-      url.hash = new URLSearchParams({cloud: endpointUrl, room: room.id}).toString();
+      url.hash = new URLSearchParams({room: room.id}).toString();
       $('.bonus-link').href = url.href;
       $('.bonus-link').textContent = 'Open registration page ↗';
       $('.bonus-qr').replaceChildren();

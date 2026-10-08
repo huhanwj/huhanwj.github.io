@@ -1,6 +1,6 @@
 import {fromSheet, validateState, migrateState, mergeRoster, round, eligible, parseAbsent, drawBatch} from './core.js?v=6';
 import {setupBonus} from './bonus.js?v=6';
-import {setupCloudBonus} from './cloud-bonus.js?v=8';
+import {setupCloudBonus} from './cloud-bonus.js?v=9';
 import {createCloudClient, cloudEndpoint} from './cloud.js?v=7';
 import {cloudDefaults} from './cloud-config.js?v=7';
 
@@ -120,6 +120,7 @@ $('cloud-form').onsubmit=handle(()=>exclusive(async()=>{
   if(draft||pending)throw Error('Save or cancel the current preview before changing the connection.');
   if(bonus?.isOpen()||bonus?.hasUnsavedResult()||(!endpoint&&bonus?.getEntrants().length))throw Error('Finish the Bonus round before connecting.');
   const adminUrl=cloudEndpoint($('cloud-url').value.trim()),publicUrl=cloudEndpoint($('student-url').value.trim());
+  if(cloudDefaults && (adminUrl!==cloudDefaults.admin || publicUrl!==cloudDefaults.student))throw Error('Use the configured class connection.');
   if(adminUrl===publicUrl)throw Error('Use separate administrator and student deployments.');
   if(endpoint&&adminUrl!==endpoint)throw Error('This browser is already linked to a different cloud. Use a separate browser profile for another class.');
   const proposed=createCloudClient(adminUrl);
@@ -141,7 +142,7 @@ async function activate(){
     sessionStorage.removeItem(LEGACY_SECRET);
     const saved=localStorage.getItem(KEY),legacy=localStorage.getItem(OLD_KEY);
     if(saved||legacy){cache(migrateState(JSON.parse(saved||legacy)));localStorage.removeItem(OLD_KEY);}
-    const config=localStorage.getItem(CLOUD)||JSON.stringify(cloudDefaults);
+    const config=cloudDefaults?JSON.stringify(cloudDefaults):localStorage.getItem(CLOUD);
     if(config){if(config.startsWith('https://'))endpoint=cloudEndpoint(config);else{const parsed=JSON.parse(config);endpoint=cloudEndpoint(parsed.admin);studentEndpoint=cloudEndpoint(parsed.student);}}
     pending=JSON.parse(localStorage.getItem(PENDING)||'null');if(pending)pending.state=validateState(pending.state);
     $('cloud-url').value=endpoint;$('student-url').value=studentEndpoint;updateLoginLink();
