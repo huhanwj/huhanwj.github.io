@@ -1,6 +1,9 @@
 /* Private, owner-executed persistence. Setup requires the signed-in owner. */
 const SOURCE_GID_ = 521726463;
 const ADMIN_EMAIL_ = 'huhanwj@gmail.com';
+const BONUS_META_ = 'BONUS_ACTIVE_V1';
+const BONUS_PENDING_ = 'BONUS_SYNC_V1';
+const BONUS_SLOT_ = 'BONUS_SLOT_V1:';
 
 function setup() {
   authenticate_();
@@ -167,7 +170,7 @@ function rpc(action, payload, sessionToken) {
     }
     document.requests.push({id:requestId,fingerprint:fingerprint,room:roomReceipt || null});
     document.requests = document.requests.slice(-30);
-    const reportsWarning = write_(document, true);
+    const reportsWarning = write_(document, ['initialize','save','attendanceSave','bonusDraw'].includes(action));
     const result = result_(document, action, roomReceipt);
     if (reportsWarning) result.reportsWarning=reportsWarning;
     return result;
@@ -221,11 +224,11 @@ function publicRpc_(action, payload) {
   const request = publicPayload_(action, payload);
   try {
     return locked_(function () {
-      const document = read_();
-      if (action === 'bonusJoin') return join_(document, request);
-      const room = requireRoom_(document, request.room);
-      return {id:room.id,open:room.open};
-    });
+      const store = bonusStore_();
+      if (!store.meta || store.meta.id !== request.room) throw Error('This Bonus link has expired. Ask for the latest QR code.');
+      if (action === 'bonusInfo') return {id:store.meta.id,open:store.meta.open};
+      return join_(store, request);
+    }, 2000);
   } catch (error) {
     const expected = [
       'This Bonus link has expired. Ask for the latest QR code.',
@@ -263,9 +266,9 @@ function authenticate_() {
   if (active !== ADMIN_EMAIL_ || effective !== ADMIN_EMAIL_) throw Error('Administrator access denied. Use the authorized Google account.');
   return active;
 }
-function locked_(fn) {
+function locked_(fn, waitMs) {
   const lock = LockService.getScriptLock();
-  if (!lock.tryLock(20000)) throw Error('The cloud service is busy. Retry the same request.');
+  if (!lock.tryLock(waitMs === undefined ? 20000 : waitMs)) throw Error('The cloud service is busy. Retry the same request.');
   try {return fn();} finally {lock.releaseLock();}
 }
 function book_() {
@@ -281,14 +284,22 @@ function read_() {
   if (document.attendance === undefined) document.attendance=[];
   if (document.batchDates === undefined) document.batchDates={};
   validateRecords_(document);
+  hydrateBonus_(document);
   return document;
 }
 function write_(document, reports) {
   const serialized = JSON.stringify(document);
   if (serialized.length > 45000) throw Error('Cloud history is full. Export a backup and ask the owner to archive it.');
   const book = book_();
+  const properties = PropertiesService.getScriptProperties();
+  // Journal changes occur only after the sheet commit. If execution stops at
+  // either boundary, the next locked caller checks this exact durable receipt.
+  const request = document.requests[document.requests.length-1];
+  properties.setProperty(BONUS_PENDING_, JSON.stringify({requestId:request && request.id}));
   book.getSheetByName('State').getRange('A1').setValue(serialized);
   SpreadsheetApp.flush();
+  syncBonus_(document, properties);
+  properties.deleteProperty(BONUS_PENDING_);
   // Display failures happen after the canonical commit, and must never trigger a redraw.
   return reports ? refreshReports_(book, document) : null;
 }
@@ -302,15 +313,79 @@ function requireRoom_(document, id) {
   if (!document.room || document.room.id !== id) throw Error('This Bonus link has expired. Ask for the latest QR code.');
   return document.room;
 }
-function join_(document, payload) {
-  const room = requireRoom_(document, payload.room);
-  const no = typeof payload.no === 'string' && /^\d+$/.test(payload.no) ? Number(payload.no) : payload.no;
-  // A retry can recover an accepted receipt even after registration closes.
-  if (room.entrants.includes(no)) return {status:'joined',no:no};
-  if (!room.open || room.winner) throw Error('Bonus registration is closed.');
-  if (!Number.isSafeInteger(no) || !document.state.students.some(p => p.no === no) || room.absent.includes(no)) throw Error('This roster No. cannot join. Check with the instructor.');
-  room.entrants.push(no);room.entrants.sort((a,b) => a-b);write_(document);
-  return {status:'joined',no:no};
+// Called only with ScriptLock held. Properties persist independently of cache
+// eviction and browser lifetime; no successful signup depends on a later drain.
+function bonusStore_() {
+  const properties = PropertiesService.getScriptProperties();
+  if (properties.getProperty(BONUS_PENDING_) || !properties.getProperty(BONUS_META_)) read_();
+  const meta = JSON.parse(properties.getProperty(BONUS_META_));
+  return {properties:properties,meta:meta};
+}
+function bonusSlotKey_(room, no) {return BONUS_SLOT_ + room + ':' + no;}
+function hydrateBonus_(document) {
+  const properties = PropertiesService.getScriptProperties();
+  const pendingText = properties.getProperty(BONUS_PENDING_);
+  const metaText = properties.getProperty(BONUS_META_);
+  if (pendingText) {
+    const pending = JSON.parse(pendingText);
+    if (pending.bootstrap || document.requests.some(r => r.id === pending.requestId)) {
+      // The sheet has the committed receipt. Rebuild from its exact snapshot,
+      // including removals, closure, reset and the persisted draw winner.
+      syncBonus_(document, properties);
+    }
+    // An uncommitted write left the previous journal intact. Keep its entries.
+    properties.deleteProperty(BONUS_PENDING_);
+  }
+  if (!metaText && !properties.getProperty(BONUS_META_)) {
+    // Existing deployments migrate their current room once, preserving entries.
+    properties.setProperty(BONUS_PENDING_, JSON.stringify({bootstrap:true}));
+    syncBonus_(document, properties);
+    properties.deleteProperty(BONUS_PENDING_);
+  }
+  const meta = JSON.parse(properties.getProperty(BONUS_META_));
+  if (!document.room || !meta || meta.id !== document.room.id) {
+    if (!!document.room !== !!meta || (document.room && meta.id !== document.room.id)) throw Error('Private Bonus journal is inconsistent. Ask the instructor to recover it.');
+    return;
+  }
+  if (meta.open !== document.room.open) throw Error('Private Bonus journal is inconsistent. Ask the instructor to recover it.');
+  const values = properties.getProperties(), prefix = BONUS_SLOT_ + meta.id + ':';
+  // Validate the persistent journal before allowing it to affect a draw.
+  const known = new Set(document.state.students.map(p => p.no));
+  const entrants = [];
+  Object.keys(values).filter(key => key.startsWith(prefix)).forEach(key => {
+    const no = Number(key.slice(prefix.length)), value = values[key];
+    if (!Number.isSafeInteger(no) || !known.has(no) || !['0','1'].includes(value)) throw Error('Private Bonus journal is invalid. Ask the instructor to recover it.');
+    if (value === '1') entrants.push(no);
+  });
+  const absent = new Set(document.room.absent);
+  if (document.state.students.some(p => !absent.has(p.no) && !Object.prototype.hasOwnProperty.call(values,bonusSlotKey_(meta.id,p.no))) || document.room.entrants.some(no => values[bonusSlotKey_(meta.id,no)] !== '1')) throw Error('Private Bonus journal is incomplete. Ask the instructor to recover it.');
+  document.room.entrants = entrants.sort((a,b) => a-b);
+}
+function syncBonus_(document, properties) {
+  const values = properties.getProperties(), next = {};
+  const room = document.room;
+  if (room) {
+    const absent = new Set(room.absent), entrants = new Set(room.entrants);
+    document.state.students.forEach(p => {
+      if (!absent.has(p.no) || entrants.has(p.no)) next[bonusSlotKey_(room.id, p.no)] = entrants.has(p.no) ? '1' : '0';
+    });
+  }
+  // While synchronization is partial, BONUS_PENDING_ prevents public reads.
+  Object.keys(values).filter(key => key.startsWith(BONUS_SLOT_) && !Object.prototype.hasOwnProperty.call(next,key)).forEach(key => properties.deleteProperty(key));
+  const changed = {};
+  Object.keys(next).forEach(key => {if (values[key] !== next[key]) changed[key]=next[key];});
+  if (Object.keys(changed).length) properties.setProperties(changed);
+  properties.setProperty(BONUS_META_, JSON.stringify(room ? {id:room.id,open:room.open,drawn:!!room.winner} : null));
+}
+function join_(store, payload) {
+  const key = bonusSlotKey_(store.meta.id, payload.no);
+  const value = store.properties.getProperty(key);
+  // Recover accepted receipts after closure or a lost response, without a write.
+  if (value === '1') return {status:'joined',no:payload.no};
+  if (!store.meta.open || store.meta.drawn) throw Error('Bonus registration is closed.');
+  if (value !== '0') throw Error('This roster No. cannot join. Check with the instructor.');
+  store.properties.setProperty(key, '1');
+  return {status:'joined',no:payload.no};
 }
 
 function sourceRoster_() {

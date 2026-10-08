@@ -1,11 +1,14 @@
 import {fromSheet, validateState, migrateState, mergeRoster, round, eligible, parseAbsent, drawBatch} from './core.js?v=8';
 import {setupBonus} from './bonus.js?v=6';
-import {setupCloudBonus} from './cloud-bonus.js?v=9';
+import {setupCloudBonus} from './cloud-bonus.js?v=10';
 import {createCloudClient, cloudEndpoint} from './cloud.js?v=9';
 import {readSession, beginSignIn, cancelSignIn, clearSession} from './auth.js?v=1';
 import {cloudDefaults} from './cloud-config.js?v=7';
 
 const KEY='ierg2060-t3-v2', OLD_KEY='ierg2060-t3-v1', CLOUD='ierg2060-t3-cloud', LEGACY_SECRET='ierg2060-t3-cloud-key', PENDING='ierg2060-t3-pending', ANSWER='ierg2060-t3-answer', MINUTES='ierg2060-t3-minutes', LOCAL_ATTENDANCE='ierg2060-t3-attendance';
+const FINISHED='ierg2060-t3-finished-sessions';
+let finishedDates=[];
+function sessionFinished(){return finishedDates.includes(sessionDate);}
 const $=id=>document.getElementById(id);
 let state=null,incoming=null,bonus=null,writable=false,busy=false,cloud=null,endpoint='',studentEndpoint='',revision=0,connected=false,connecting=false,signingIn=false,pending=null,initial=null,sourceInitial=null,draft=null,absenceText=null,attendance=[],batchDates={},sessionDate=today(),recordsWarning="",revealing=false,questionText=null,answer=null,timerInterval=null;
 function today(){const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());return ['year','month','day'].map(key=>parts.find(p=>p.type===key).value).join('-');}
@@ -14,7 +17,7 @@ function selectedAttendance(){return attendance.find(row=>row.date===sessionDate
 function attendanceReady(date,absent){const record=attendance.find(row=>row.date===date);return validDate(date)&&Array.isArray(absent)&&!!record&&record.absent.length===absent.length&&record.absent.every(no=>absent.includes(no));}
 function requireAttendance(date,absent){if(!attendanceReady(date,absent))throw Error('Save attendance for this class date before drawing.');}
 function dateInput(){const value=$('session-date').value;if(!validDate(value))throw Error('Choose a valid class date.');return value;}
-function notice(text,error=false){$('notice').textContent=text;$('notice').classList.toggle('error',error);$('notice').hidden=!text;if($('settings-dialog').open)$('settings-status').textContent=text;}
+function notice(text,error=false){$('notice').textContent=text;$('notice').classList.toggle('error',error);$('notice').hidden=!text;if($('settings-dialog').open)$('settings-status').textContent=text;if($('finish-dialog').open)$('finish-status').textContent=text;}
 function handle(fn){return async event=>{event?.preventDefault();try{await fn(event);}catch(error){notice(error.message,true);}finally{controls();}};}
 function cache(next){const clean=validateState(next);localStorage.setItem(KEY,JSON.stringify(clean));state=clean;}
 function studentName(no){return state?.students.find(p=>p.no===no)?.name||'';}
@@ -66,21 +69,22 @@ function durationMinutes(){const minutes=Number($('answer-minutes').value);if(!N
 function storeAnswer(){if(answer)localStorage.setItem(ANSWER,JSON.stringify(answer));else localStorage.removeItem(ANSWER);}
 function clearAnswer(){answer=null;storeAnswer();clearInterval(timerInterval);timerInterval=null;}
 function timerTick(){
-  const remaining=answer?.deadline?Math.max(0,Math.ceil((answer.deadline-Date.now())/1000)):Number($('answer-minutes').value||0)*60;
+  const remaining=answer?.phase==='bonus'?answer.remainingSeconds:answer?.deadline?Math.max(0,Math.ceil((answer.deadline-Date.now())/1000)):Number($('answer-minutes').value||0)*60;
   $('answer-clock').textContent=Number.isFinite(remaining)?`${String(Math.floor(remaining/60)).padStart(2,'0')}:${String(remaining%60).padStart(2,'0')}`:'--:--';
   const expired=!!answer?.deadline&&remaining===0;
   $('answer-clock').classList.toggle('expired',expired);
-  $('timer-status').textContent=answer?.deadline?(expired?'Time is up.':'Answer in progress.'):'Ready to start.';
-  if(expired){clearInterval(timerInterval);timerInterval=null;}
+  $('timer-status').textContent=answer?.phase==='bonus'?'Answer ended · Bonus round':answer?.deadline?(expired?'Time is up.':'Answer in progress.'):'Ready to start.';
+  if(expired||answer?.phase==='bonus'){clearInterval(timerInterval);timerInterval=null;}
 }
 function startTimer(){
   if(!answerBatch())throw Error('Confirm the saved draw before starting the timer.');
+  if(answer.phase==='bonus'){timerTick();return;}
   if(!answer.deadline){answer.deadline=Date.now()+answer.minutes*60000;try{storeAnswer();}catch{answer.deadline=null;throw Error('Draw saved, but the timer could not be stored. Retry Start.');}}
   clearInterval(timerInterval);timerInterval=setInterval(timerTick,250);timerTick();
 }
 function restoreAnswer(){
   try{const saved=JSON.parse(localStorage.getItem(ANSWER)||'null');
-    if(saved&&typeof saved.batchId==='string'&&validDate(saved.date)&&Number.isInteger(saved.minutes)&&saved.minutes>=1&&saved.minutes<=180&&(saved.deadline===null||(Number.isFinite(saved.deadline)&&saved.deadline>0))){answer=saved;sessionDate=saved.date;$('answer-minutes').value=saved.minutes;}
+    if(saved&&typeof saved.batchId==='string'&&validDate(saved.date)&&Number.isInteger(saved.minutes)&&saved.minutes>=1&&saved.minutes<=180&&(saved.deadline===null||(Number.isFinite(saved.deadline)&&saved.deadline>0))){answer=saved;if(answer.phase==='bonus'&&(!Number.isFinite(answer.remainingSeconds)||answer.remainingSeconds<0))answer.remainingSeconds=0;sessionDate=saved.date;$('answer-minutes').value=saved.minutes;}
     else localStorage.removeItem(ANSWER);
   }catch{localStorage.removeItem(ANSWER);}
 }
@@ -111,11 +115,18 @@ function controls(){
   let n=0;try{n=questionNumber();}catch{}
   const attendanceSaved=attendanceReady($('session-date').value,absent);
   const locked=connecting||revealing||busy||!!pending||!!initial||!!endpoint&&!connected||!writable;
-  $('draw').disabled=locked||!!answer||!!draft||!state||!pool.length||!n||absent===null||!attendanceSaved;
+  $('draw').disabled=sessionFinished()||locked||!!answer||!!draft||!state||!pool.length||!n||absent===null||!attendanceSaved;
   $('draw-label').textContent=revealing?'Drawing…':busy?'Saving…':!attendanceSaved?'Save attendance first':'Draw one student';
   $('pool-count').replaceChildren(document.createTextNode(`${pool.length} `));const small=document.createElement('small');small.textContent='available';$('pool-count').append(small);
   $('next-round').textContent=q===2?'BOTH ROUNDS DRAWN':'ELIGIBLE STUDENTS';
-  $('session-date').disabled=locked||!!draft||!!answer;$('question').disabled=locked||!!draft||!!answer;$('absent').disabled=locked||!!draft||!!answer;$('backup').disabled=!state;$('bonus-open').disabled=locked||!!draft||!!answer||!state||absent===null||!!endpoint&&!studentEndpoint;
+  $('session-date').disabled=locked||!!draft||!!answer;$('question').disabled=locked||!!draft||!!answer;$('absent').disabled=locked||!!draft||!!answer;$('backup').disabled=!state;$('bonus-open').disabled=sessionFinished()||locked||!!draft||!state||absent===null||!!endpoint&&!studentEndpoint;
+  $('answer-bonus').disabled=$('bonus-open').disabled||!answerBatch();
+  $('session-finish').disabled=locked||!state||sessionFinished();
+  $('session-finished').hidden=!sessionFinished();
+  $('session-finished-text').textContent=`${sessionDate} · Session finished. Saved attendance and draws are kept.`;
+  $('session-resume').disabled=locked;
+  $('finish-confirm').disabled=busy||!!pending;
+  $('draw-table').hidden=sessionFinished();
   $('choose-file').disabled=locked||!!endpoint;$('confirm-import').disabled=locked||!!endpoint;
   $('connection-panel').hidden=!endpoint||connected;
   $('connect-main').disabled=busy||connecting||revealing||!writable;
@@ -138,10 +149,10 @@ function controls(){
   let minutesValid=true;try{durationMinutes();}catch{minutesValid=false;}
   $('answer-minutes').disabled=busy||revealing||!!pending||!!answer;
   $('draw-save').textContent=busy?'Saving…':drawPending?'Retry Start':answer?.deadline?'Started':'Start';
-  $('draw-save').disabled=revealing||busy||!writable||!!endpoint&&!connected||!!initial||!minutesValid||!!answer?.deadline||(!draft&&!drawPending&&!answerBatch());
+  $('draw-save').disabled=answer?.phase==='bonus'||revealing||busy||!writable||!!endpoint&&!connected||!!initial||!minutesValid||!!answer?.deadline||(!draft&&!drawPending&&!answerBatch());
   $('draw-cancel').disabled=revealing||busy||!!pending||!draft||pool.length<2;
-  $('answer-next').disabled=revealing||busy||!!pending||!answerBatch();
-  $('draw-save-status').textContent=drawPending?'Save not confirmed. Retry Start to keep this same student.':draft?'Start saves this draw, then begins the timer.':answer?.deadline?'Draw saved. Next student ends this turn and draws the next student.':answer?'Draw saved. Click Start to begin the timer.':'';
+  $('answer-next').disabled=locked||sessionFinished()||!answerBatch();
+  $('draw-save-status').textContent=answer?.phase==='bonus'?'The original draw is saved. Use Bonus round, Next student, or Finish session.':drawPending?'Save not confirmed. Retry Start to keep this same student.':draft?'Start saves this draw, then begins the timer.':answer?.deadline?'Draw saved. Next student ends this turn and draws the next student.':answer?'Draw saved. Click Start to begin the timer.':'';
   timerTick();
   const attendancePending=pending?.action==='attendanceSave';
   $('attendance-save').textContent=attendancePending?'Retry attendance save':'Save attendance';
@@ -225,7 +236,38 @@ $('attendance-save').onclick=handle(()=>{
 });
 $('records-refresh').onclick=handle(()=>exclusive(async()=>{cloudState(await call('recordsRefresh'));notice(recordsWarning||'Records updated.');}));
 $('absence-form').onsubmit=event=>{event.preventDefault();absenceText=$('absent').value;controls();};
-$('settings-open').onclick=()=>$('settings-dialog').showModal();$('bonus-open').onclick=handle(async()=>{$('bonus-dialog').showModal();await bonus?.refresh?.();});
+$('settings-open').onclick=()=>$('settings-dialog').showModal();
+async function openBonus(){
+  if($('bonus-open').disabled)return;
+  if(answerBatch()&&answer.phase!=='bonus'){
+    const prior=answer;
+    answer={...answer,phase:'bonus',remainingSeconds:answer.deadline?Math.max(0,Math.ceil((answer.deadline-Date.now())/1000)):answer.minutes*60};
+    try{storeAnswer();}catch(error){answer=prior;throw error;}
+    clearInterval(timerInterval);timerInterval=null;render();
+  }
+  $('bonus-dialog').showModal();await bonus?.refresh?.();
+}
+$('bonus-open').onclick=handle(openBonus);$('answer-bonus').onclick=handle(openBonus);
+$('session-finish').onclick=()=>{
+  if($('session-finish').disabled)return;
+  $('finish-detail').textContent=draft?'The current preview has not been saved and will be discarded. Saved attendance and draws will be kept. Bonus registration will close.':'The timer will stop and Bonus registration will close. Saved attendance, draws, and Bonus entries will be kept.';
+  $('finish-status').textContent='';$('finish-dialog').showModal();
+};
+$('finish-confirm').onclick=handle(()=>exclusive(async()=>{
+  if(pending)throw Error('Confirm the pending save before finishing this session.');
+  if(bonus?.hasUnsavedResult())throw Error('Confirm the pending Bonus change before finishing. Open Bonus round and retry it.');
+  await bonus?.refresh?.();
+  if(bonus?.hasUnsavedResult())throw Error('Confirm the pending Bonus change before finishing.');
+  if(await bonus?.close?.()===false)throw Error('Bonus registration closure was not confirmed. Open Bonus round and retry before finishing.');
+  const next=[...new Set([...finishedDates,sessionDate])];
+  localStorage.setItem(FINISHED,JSON.stringify(next));
+  clearAnswer();draft=null;finishedDates=next;questionText=null;absenceText=null;
+  $('finish-dialog').close();$('bonus-dialog').close();notice('');render();
+}));
+$('session-resume').onclick=handle(()=>{
+  if($('session-resume').disabled)return;
+  const next=finishedDates.filter(date=>date!==sessionDate);localStorage.setItem(FINISHED,JSON.stringify(next));finishedDates=next;notice('');render();
+});
 document.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>$(button.dataset.close).close());
 function preview(next){if(endpoint)throw Error('Cloud progress is active. Use Refresh names to update the roster without replacing turns.');if(bonus?.isOpen()||bonus?.hasUnsavedResult()||bonus?.getEntrants().length)throw Error('Finish the Bonus round before importing.');incoming=migrateState(next);$('import-summary').textContent=`${incoming.students.length} students, including names when available. This replaces the draw progress in this browser.`;$('import-preview').hidden=false;}
 $('choose-file').onclick=()=>$('import-file').click();$('import-file').onchange=handle(async event=>{const file=event.target.files[0];if(!file)return;try{const text=await file.text();preview(file.name.toLowerCase().endsWith('.json')?JSON.parse(text):fromSheet(text));}finally{event.target.value='';}});
@@ -247,7 +289,7 @@ async function loadCloud(loaded){
       if(received){localStorage.removeItem(PENDING);pending=null;absenceText=null;questionText=null;render();}
     }
     if(answer&&!pending&&!answerBatch())clearAnswer();
-    if(answer?.deadline&&answerBatch()){clearInterval(timerInterval);timerInterval=setInterval(timerTick,250);}
+    if(answer?.deadline&&answerBatch())startTimer();
     render();
   }
   else{revision=result.revision;sourceInitial=validateState({version:2,students:result.roster,absent:[],batches:[],bonus:[]});initial=state?mergeRoster(state,result.roster):sourceInitial;$('cloud-status').textContent=`Cloud has no records yet. Start with ${initial.students.length} students and ${initial.batches.length} saved batches from this browser${state?'':' / the source sheet'}.`;}
@@ -292,6 +334,7 @@ async function activate(){
   writable=true;
   try{
     sessionStorage.removeItem(LEGACY_SECRET);
+    try{const dates=JSON.parse(localStorage.getItem(FINISHED)||'[]');finishedDates=Array.isArray(dates)?dates.filter(validDate):[];}catch{finishedDates=[];}
     const saved=localStorage.getItem(KEY),legacy=localStorage.getItem(OLD_KEY);
     if(saved||legacy){cache(migrateState(JSON.parse(saved||legacy)));localStorage.removeItem(OLD_KEY);}
     const config=cloudDefaults?JSON.stringify(cloudDefaults):localStorage.getItem(CLOUD);
@@ -305,6 +348,7 @@ async function activate(){
     }
     const lastMinutes=Number(localStorage.getItem(MINUTES));if(Number.isInteger(lastMinutes)&&lastMinutes>=1&&lastMinutes<=180)$('answer-minutes').value=lastMinutes;
     restoreAnswer();
+    if(pending||answer)finishedDates=finishedDates.filter(date=>date!==sessionDate);
     $('cloud-url').value=endpoint;$('student-url').value=studentEndpoint;
     if(endpoint){
       $('cloud-status').textContent='Sign in with the authorized Google account to resume.';

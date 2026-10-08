@@ -1,4 +1,4 @@
-// The room and its draw result are stored by the sheet service.
+// The service persists live registrations and archives the closed round to Sheets.
 export function setupCloudBonus({container, call, endpoint, getAbsent, getStudentName, onState, publicBaseUrl}) {
   if (!container || typeof call !== 'function') throw new Error('Bonus draw needs a container and cloud connection.');
   let room = null;
@@ -14,7 +14,7 @@ export function setupCloudBonus({container, call, endpoint, getAbsent, getStuden
       <div class="bonus-heading"><h2 id="bonus-title">Volunteer draw</h2><span class="bonus-count" aria-live="polite">0 registered</span></div>
       <div class="bonus-actions"><button type="button" data-action="open">Open registration</button><button type="button" data-action="close" disabled>Close registration</button><button type="button" data-action="draw" disabled>Draw a volunteer</button></div>
       <p class="bonus-status" role="status" aria-live="polite">Reading registration…</p>
-      <div class="bonus-share" hidden><div class="bonus-qr" aria-label="Student registration QR code"></div><div><strong>Scan to join</strong><p>Registration is saved in Google Sheets.</p><a class="bonus-link" target="_blank" rel="noopener">Open registration page</a><button type="button" data-action="copy">Copy link</button></div></div>
+      <div class="bonus-share" hidden><div class="bonus-qr" aria-label="Student registration QR code"></div><div><strong>Scan to join</strong><p>Entries are confirmed by the registration service.</p><a class="bonus-link" target="_blank" rel="noopener">Open registration page</a><button type="button" data-action="copy">Copy link</button></div></div>
       <details class="bonus-advanced"><summary>Manual entry</summary><p>Students self-report their roster No. Please check it in person.</p><form class="bonus-manual"><label>Roster No. <input name="no" type="text" inputmode="numeric" autocomplete="off" placeholder="e.g. 12" disabled></label><button type="submit" disabled>Add</button></form><p class="bonus-manual-status" role="status" aria-live="polite"></p><button type="button" data-action="reset" disabled>Clear registrations</button></details>
       <ul class="bonus-entrants" aria-label="Registered roster numbers"></ul>
       <p class="bonus-winner" role="status" aria-live="polite"></p>
