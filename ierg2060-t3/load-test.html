@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex,nofollow,noarchive"><meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-src 'self' https://script.google.com https://*.googleusercontent.com https://accounts.google.com; connect-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+<title>IERG2060 · Test registration load</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f5f7fa;color:#172235;font:15px/1.5 system-ui,sans-serif}main{max-width:1100px;margin:36px auto;padding:0 22px}h1{margin-bottom:8px;font-size:28px}h2{font-size:19px}.banner{padding:15px 20px;background:#fff0ca;border:1px solid #c79625;border-radius:8px;font-weight:700}.panel{background:white;padding:20px;border:1px solid #d1d9e4;border-radius:8px;margin:20px 0}.controls{display:flex;align-items:center;flex-wrap:wrap;gap:12px}button,select{font:inherit;padding:8px 14px;border:1px solid #94a4b8;border-radius:6px;background:#fff;color:#234c83}button{cursor:pointer}button.primary{background:#234c83;color:white}button:disabled{opacity:.45;cursor:default}a{color:#234c83}.muted{color:#58677a;font-size:13px}.stats{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}.stats div{background:#edf3fb;padding:14px;border-radius:6px}.stats strong{display:block;font-size:23px}.stats span{font-size:12px}table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}td,th{text-align:left;padding:9px;border-bottom:1px solid #e2e7ef;font-size:13px}th{white-space:nowrap}.scroll{overflow:auto}#status{white-space:pre-wrap}#status[data-state=error]{color:#a32828}#status[data-state=success]{color:#146747}#frames{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}#frames iframe{width:100%;height:450px;border:1px solid #c4cedb;background:white}pre{max-height:380px;overflow:auto;background:#f1f4f8;padding:12px;font-size:12px}label{display:inline-flex;gap:8px;align-items:center}[hidden]{display:none!important}@media(max-width:700px){.stats{grid-template-columns:repeat(2,1fr)}#frames{grid-template-columns:1fr}main{padding:0 12px}}
+</style>
+<script type="module" src="load-test.js?v=1"></script>
+</head><body><main>
+<p class="banner">TEST ONLY · 35 fictional students · disposable test registration</p>
+<h1>QR registration load test</h1>
+<p>Run the actual student registration page in 25 independent browser frames against the Google test spreadsheet. Each page submits its own roster No. through its own Google bridge.</p>
+<section class="panel">
+<div class="controls"><button id="signin">Sign in with Google</button><button id="verify">Verify test spreadsheet</button><a id="storage-link" target="_blank" rel="noopener noreferrer" hidden>Open test spreadsheet ↗</a><a href="index.html?mode=test">Test instructor page ↗</a></div>
+<p id="identity" class="muted">Owner authentication and the exact fictional roster must be verified before test changes.</p>
+<p id="status" role="status" aria-live="polite">Checking test mode…</p>
+</section>
+<section class="panel">
+<div class="controls"><label>Scenario <select id="scenario"><option value="warm" selected>Warm simultaneous registration</option><option value="cold">Cold page-to-confirmation</option></select></label><label>Concurrent students <select id="count"><option>20</option><option selected>25</option></select></label><label><input id="duplicates" type="checkbox" checked> Check 3 duplicate submissions</label><button id="start" class="primary" disabled>Start new test</button><button id="recover" hidden>Retry the same pending operation</button><button id="download" disabled>Download JSON report</button></div>
+<p class="muted">Start new test clears only the previous TEST bonus registration, then opens a fresh TEST room. The first visit preserves an existing room. At most 25 student submissions run together. Duplicate probes use three new student frames after the main burst. The room is then closed and read again to check persistence.</p>
+<p class="muted">The warm scenario waits for all 25 Google bridges before submitting together. Bridge startup is reported separately. The cold scenario submits after every student handler is installed, so totals can include remaining bridge setup. Both report actual Apps Script calls and any real retry waits. “First RPC” includes any remaining bridge wait inside the call. Owner verification is warm and excluded from student latency.</p>
+<div class="stats"><div><strong id="success">—</strong><span>Students confirmed</span></div><div><strong id="p50">—</strong><span>Total p50</span></div><div><strong id="p95">—</strong><span>Total p95</span></div><div><strong id="max">—</strong><span>Total max</span></div><div><strong id="busy">—</strong><span>Server busy responses</span></div></div>
+<p id="timing-detail" class="muted">Timing starts with real student submissions.</p>
+<p id="verification" class="muted">No test has run.</p>
+</section>
+<section class="panel"><h2>Individual student results</h2><div class="scroll"><table><thead><tr><th>Client / No.</th><th>Result</th><th>Dispatch offset</th><th>First RPC</th><th>Total</th><th>Attempts</th><th>Busy</th></tr></thead><tbody id="clients"></tbody></table></div></section>
+<details class="panel"><summary>Actual student pages</summary><p class="muted">These frames run join.html. No administrator token is sent in the load-test commands.</p><div id="frames"></div></details>
+<details class="panel"><summary>Report JSON</summary><pre id="report"></pre></details>
+</main></body></html>

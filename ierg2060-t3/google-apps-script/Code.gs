@@ -4,9 +4,89 @@ const ADMIN_EMAIL_ = 'huhanwj@gmail.com';
 const BONUS_META_ = 'BONUS_ACTIVE_V1';
 const BONUS_PENDING_ = 'BONUS_SYNC_V1';
 const BONUS_SLOT_ = 'BONUS_SLOT_V1:';
+// A dedicated test deployment sets this true in its deployed version only.
+// Even legacy rpc callers on that deployment are then confined to test data.
+const TEST_DEPLOYMENT_ONLY_ = false;
+// Apps Script globals belong to one execution; the flag is restored even on
+// failure. Test requests never change the production STORE_ID or journal.
+let TEST_CONTEXT_ = TEST_DEPLOYMENT_ONLY_;
+
+function testContext_(fn) {
+  const previous = TEST_CONTEXT_;
+  TEST_CONTEXT_ = true;
+  try {return fn();} finally {TEST_CONTEXT_ = previous;}
+}
+function storageProperties_() {
+  const properties = PropertiesService.getScriptProperties();
+  if (!TEST_CONTEXT_) return properties;
+  const key_ = key => {
+    if (key !== 'STORE_ID' && key !== BONUS_META_ && key !== BONUS_PENDING_ && !key.startsWith(BONUS_SLOT_)) throw Error('Invalid test storage property.');
+    return 'TEST_' + key;
+  };
+  return {
+    getProperty:key => properties.getProperty(key_(key)),
+    setProperty:(key,value) => properties.setProperty(key_(key),value),
+    deleteProperty:key => properties.deleteProperty(key_(key)),
+    getProperties:() => {
+      const values = properties.getProperties(), scoped = {};
+      Object.keys(values).filter(key => key === 'TEST_STORE_ID' || key === 'TEST_' + BONUS_META_ || key === 'TEST_' + BONUS_PENDING_ || key.startsWith('TEST_' + BONUS_SLOT_)).forEach(key => {scoped[key.slice(5)]=values[key];});
+      return scoped;
+    },
+    setProperties:values => {
+      const scoped = {};
+      Object.keys(values).forEach(key => {scoped[key_(key)]=values[key];});
+      properties.setProperties(scoped);
+    }
+  };
+}
+function storeId_() {
+  const id = storageProperties_().getProperty('STORE_ID');
+  if (!id) throw Error(TEST_CONTEXT_ ? 'Test setup is incomplete. The owner must run setupTest.' : 'Cloud setup is incomplete. The owner must run setup.');
+  if (TEST_CONTEXT_ && id === PropertiesService.getScriptProperties().getProperty('STORE_ID')) throw Error('Test storage must be separate from production.');
+  return id;
+}
+
+// Run only as the signed-in owner from the editor. Re-running keeps test draws.
+function setupTest() {
+  authenticate_();
+  return testContext_(function () {return locked_(setupTest_);});
+}
+function setupTest_() {
+  const properties = storageProperties_();
+  let id = properties.getProperty('STORE_ID');
+  if (!id) {
+    const book = SpreadsheetApp.create('IERG2060 Tutorial 3 — TEST — 35 fictional students');
+    const roster = Array.from({length:35},(_,i) => ({no:i+1,name:'Test Student ' + String(i+1).padStart(2,'0'),q:[false,false]}));
+    const document = {revision:0,state:{version:2,students:roster,absent:[],batches:[],bonus:[]},room:null,requests:[],attendance:[],batchDates:{}};
+    book.getSheets()[0].setName('State');
+    book.getSheetByName('State').getRange('A1').setValue(JSON.stringify(document));
+    book.insertSheet('Draw log');
+    const sheet = book.insertSheet('Roster');
+    sheet.getRange(2,2,35,1).setNumberFormat('@');
+    sheet.getRange(1,1,36,4).setValues([['No.','Name','Turn1','Turn2']].concat(roster.map(p => [p.no,"'" + p.name,false,false])));
+    sheet.setFrozenRows(1);
+    SpreadsheetApp.flush();
+    id = book.getId();
+    properties.setProperty('STORE_ID',id);
+  }
+  // A manually misconfigured test pointer cannot read or modify live storage.
+  const book = book_(), roster = roster_();
+  if (roster.length !== 35 || roster.some((p,i) => p.no !== i+1 || p.name !== 'Test Student ' + String(i+1).padStart(2,'0') || p.q.some(Boolean))) throw Error('The test roster must contain exactly the 35 fictional students.');
+  const document = read_();
+  if (!document.state) throw Error('The test state is missing. Recover the test spreadsheet without resetting production.');
+  refreshNames_(document.state,roster);
+  const reportsWarning = refreshReports_(book,document);
+  console.log('Test storage: ' + storageUrl_());
+  return Object.assign(ownerMetadata_(document),reportsWarning ? {reportsWarning:reportsWarning} : {});
+}
+
+function rpcTest(action, payload, sessionToken) {
+  return testContext_(function () {return rpc(action,payload,sessionToken);});
+}
 
 function setup() {
   authenticate_();
+  if (TEST_DEPLOYMENT_ONLY_) throw Error('This deployment is test-only. Run setupTest.');
   return locked_(setup_);
 }
 
@@ -64,6 +144,7 @@ function doGet(e) {
   const template = HtmlService.createTemplateFromFile('Bridge');
   const channel = e && e.parameter && e.parameter.channel;
   template.channel = typeof channel === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(channel) ? channel : '';
+  template.testMode = TEST_DEPLOYMENT_ONLY_ || e.parameter.test === '1';
   return template.evaluate().setTitle('IERG2060 cloud connection').setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
@@ -75,7 +156,7 @@ function rpc(action, payload, sessionToken) {
   if (action === 'exchangeLogin') return exchangeLogin_(payload);
   const email = sessionToken === undefined ? authenticate_() : authenticateSession_(sessionToken);
   if (Object.prototype.hasOwnProperty.call(payload, 'adminKey') || Object.prototype.hasOwnProperty.call(payload, 'email')) throw Error('Account credentials must not be supplied in a cloud request.');
-  if (action === 'auth') return {ok:true,email:email};
+  if (action === 'auth') return {ok:true,email:email,environment:TEST_CONTEXT_ ? 'test' : 'production'};
   if (action === 'names') return locked_(function () {return Object.assign({roster:roster_()}, ownerMetadata_(read_()));});
   if (action === 'load') {
     return locked_(function () {
@@ -272,9 +353,7 @@ function locked_(fn, waitMs) {
   try {return fn();} finally {lock.releaseLock();}
 }
 function book_() {
-  const id = PropertiesService.getScriptProperties().getProperty('STORE_ID');
-  if (!id) throw Error('Cloud setup is incomplete. The owner must run setup.');
-  return SpreadsheetApp.openById(id);
+  return SpreadsheetApp.openById(storeId_());
 }
 function read_() {
   const text = book_().getSheetByName('State').getRange('A1').getValue();
@@ -291,7 +370,7 @@ function write_(document, reports) {
   const serialized = JSON.stringify(document);
   if (serialized.length > 45000) throw Error('Cloud history is full. Export a backup and ask the owner to archive it.');
   const book = book_();
-  const properties = PropertiesService.getScriptProperties();
+  const properties = storageProperties_();
   // Journal changes occur only after the sheet commit. If execution stops at
   // either boundary, the next locked caller checks this exact durable receipt.
   const request = document.requests[document.requests.length-1];
@@ -316,14 +395,14 @@ function requireRoom_(document, id) {
 // Called only with ScriptLock held. Properties persist independently of cache
 // eviction and browser lifetime; no successful signup depends on a later drain.
 function bonusStore_() {
-  const properties = PropertiesService.getScriptProperties();
+  const properties = storageProperties_();
   if (properties.getProperty(BONUS_PENDING_) || !properties.getProperty(BONUS_META_)) read_();
   const meta = JSON.parse(properties.getProperty(BONUS_META_));
   return {properties:properties,meta:meta};
 }
 function bonusSlotKey_(room, no) {return BONUS_SLOT_ + room + ':' + no;}
 function hydrateBonus_(document) {
-  const properties = PropertiesService.getScriptProperties();
+  const properties = storageProperties_();
   const pendingText = properties.getProperty(BONUS_PENDING_);
   const metaText = properties.getProperty(BONUS_META_);
   if (pendingText) {
@@ -561,12 +640,10 @@ function validateRecords_(document) {
   });
 }
 function storageUrl_() {
-  const id = PropertiesService.getScriptProperties().getProperty('STORE_ID');
-  if (!id) throw Error('Cloud setup is incomplete. The owner must run setup.');
-  return 'https://docs.google.com/spreadsheets/d/' + id;
+  return 'https://docs.google.com/spreadsheets/d/' + storeId_();
 }
 function ownerMetadata_(document) {
-  return {attendance:document.attendance,batchDates:document.batchDates,storageUrl:storageUrl_(),requestIds:document.requests.map(row => row.id)};
+  return {environment:TEST_CONTEXT_ ? 'test' : 'production',rosterCount:document.state ? document.state.students.length : roster_().length,attendance:document.attendance,batchDates:document.batchDates,storageUrl:storageUrl_(),requestIds:document.requests.map(row => row.id)};
 }
 // Run once in the Apps Script editor after updating an existing deployment.
 function refreshRecords() {

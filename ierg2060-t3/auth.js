@@ -1,7 +1,7 @@
-import {cloudDefaults} from './cloud-config.js';
+import {cloudDefaults, testMode as configuredTestMode} from './cloud-config.js?v=8';
 
 const AUTH_ORIGIN = 'https://huhanwj.github.io';
-const SESSION_KEY = 'ierg2060-auth-session';
+const sessionKey = testMode => testMode === true ? 'ierg2060-test:ierg2060-auth-session' : 'ierg2060-auth-session';
 const SECRET = /^[a-f0-9]{64}$/;
 const SIGN_IN_TIMEOUT = 5 * 60 * 1000;
 let activeSignIn = null;
@@ -13,16 +13,16 @@ function sessionValue(value) {
   return {token: value.token, expiresAt: value.expiresAt, email: value.email};
 }
 
-export function clearSession() {
-  try {sessionStorage.removeItem(SESSION_KEY);} catch (_) {}
+export function clearSession({testMode=configuredTestMode}={}) {
+  try {sessionStorage.removeItem(sessionKey(testMode));} catch (_) {}
 }
 
-export function readSession() {
+export function readSession({testMode=configuredTestMode}={}) {
   try {
-    const session = sessionValue(JSON.parse(sessionStorage.getItem(SESSION_KEY) || 'null'));
+    const session = sessionValue(JSON.parse(sessionStorage.getItem(sessionKey(testMode)) || 'null'));
     if (session) return session;
   } catch (_) {}
-  clearSession();
+  clearSession({testMode});
   return null;
 }
 
@@ -43,7 +43,7 @@ export function cancelSignIn() {
 
 // Keep this function synchronous until window.open: callers invoke it directly
 // from the Sign in button's click so browsers permit the Google popup.
-export function beginSignIn(adminUrl, exchangeFn) {
+export function beginSignIn(adminUrl, exchangeFn, {testMode=configuredTestMode}={}) {
   if (activeSignIn) {
     try {activeSignIn.popup?.focus();} catch (_) {}
     return activeSignIn.promise;
@@ -101,7 +101,7 @@ export function beginSignIn(adminUrl, exchangeFn) {
         error.serverConfirmed = true;
         throw error;
       }
-      try {sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));}
+      try {sessionStorage.setItem(sessionKey(testMode), JSON.stringify(session));}
       catch (_) {
         const error = Error('This browser cannot save the sign-in session. Allow session storage and sign in again.');
         error.serverConfirmed = true;

@@ -11,11 +11,12 @@
     *{box-sizing:border-box}body{margin:0;min-height:100svh;background:white;color:#000;font-family:Georgia,serif;display:grid;place-items:center;padding:26px 18px}main{width:min(100%,440px);background:white;border:1px solid gray;padding:24px 26px}.eyebrow{font-size:11px;letter-spacing:1.5px;color:#cd7b62;font-weight:bold;margin:0 0 14px}h1{font-size:165%;color:#527bbd;line-height:1.1;margin:0 0 12px;padding-bottom:6px;border-bottom:1px solid #aaa}p{line-height:1.4}label{display:block;font-weight:bold;margin:20px 0 6px}input{font:inherit;font-size:1.2rem;width:100%;padding:6px 8px;border:1px solid gray;background:white;color:#000}input::placeholder{color:#999}input:focus,button:focus-visible{outline:2px solid #224b8d;outline-offset:2px}button{font:inherit;font-weight:bold;width:100%;padding:8px;border:1px solid gray;background:#f6f6f6;color:#224b8d;margin-top:12px;cursor:pointer;min-height:36px}button:hover:enabled{background:#ffffee}button:disabled{opacity:.45;cursor:default}.status{font-size:13px;min-height:3em;background:#ffffee;border:1px solid silver;padding:10px;margin-top:16px}.status[data-state=error]{color:#aa0000}.status[data-state=success]{color:#008800}.note{font-size:12px;margin-top:18px;color:#333}.retry{background:#f6f6f6}footer{margin-top:20px;font-size:12px;color:#777;border-top:1px solid #c0c0c0;padding-top:10px}[hidden]{display:none!important}
   </style>
   <script src="vendor/peerjs.min.js" defer></script>
-  <script type="module" src="cloud-join.js?v=9"></script>
+  <script type="module" src="cloud-join.js?v=10"></script>
 </head>
 <body>
   <main>
     <p class="eyebrow">IERG 2060 · VOLUNTEER BONUS</p>
+    <p id="test-banner" class="status" hidden><strong>TEST · 35 fictional students</strong><br>Registration is saved only in the test dataset.</p>
     <h1>Bonus registration</h1>
     <p>Enter the <strong>No.</strong> shown beside your name on the class roster to join this bonus draw.</p>
     <form id="join-form">

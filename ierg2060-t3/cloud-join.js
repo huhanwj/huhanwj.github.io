@@ -1,8 +1,14 @@
-import {createCloudClient} from './cloud.js?v=9';
-import {cloudDefaults} from './cloud-config.js?v=7';
+import {createCloudClient} from './cloud.js?v=10';
+import {cloudDefaults, testMode, browserStateKey} from './cloud-config.js?v=8';
 
+document.getElementById('test-banner').hidden = !testMode;
+if (testMode) document.title = 'TEST · Bonus registration';
+const query = new URLSearchParams(location.search);
+const harnessRun = query.get('loadtest');
+const harnessClient = query.get('client');
+const harness = testMode && window.parent !== window && /^[a-f0-9-]{36}$/i.test(harnessRun || '') && /^[a-zA-Z0-9_-]{1,80}$/.test(harnessClient || '');
 const params = new URLSearchParams(location.hash.slice(1));
-if (params.has('round') && !params.has('cloud')) {
+if (!testMode && params.has('round') && !params.has('cloud')) {
   // Existing PeerJS links still use the original registration flow.
   await import('./join.js?v=2');
 } else {
@@ -28,7 +34,10 @@ if (params.has('round') && !params.has('cloud')) {
     'The cloud service is busy. Retry the same request.',
     'Registration service unavailable. Retry or check with the instructor.'
   ]);
-  const storageKey = `ierg2060-cloud-join:${endpoint}:${room}`;
+  const storageKey = browserStateKey(`ierg2060-cloud-join:${endpoint}:${room}${harness ? `:${harnessRun}:${harnessClient}` : ''}`);
+  function report(event, detail={}) {
+    if (harness) window.parent.postMessage({type:'ierg2060-loadtest',runId:harnessRun,clientId:harnessClient,event,...detail},location.origin);
+  }
   const show = (message, state = '') => { status.textContent = message; status.dataset.state = state; };
   const parseNo = value => /^\d+$/.test(String(value).trim()) && Number.isSafeInteger(Number(value)) && Number(value) > 0 ? Number(value) : null;
   function remember(value) { try { localStorage.setItem(storageKey, JSON.stringify(value)); } catch { /* The server registration remains saved. */ } }
@@ -43,7 +52,10 @@ if (params.has('round') && !params.has('cloud')) {
   function connect() {
     client?.destroy();
     client = null;
-    client = createCloudClient(endpoint);
+    client = createCloudClient(endpoint, {testMode});
+    if (harness) client.ready().then(() => {
+      if (!suspended) report('ready', {phase:'bridge'});
+    }).catch(error => {if (!suspended) report('error', {pending:!!attempt,message:error.message});});
     reconnect = false;
   }
   function cancelWait() {
@@ -72,6 +84,8 @@ if (params.has('round') && !params.has('cloud')) {
     const no = attempt?.no ?? parseNo(input.value);
     if (no === null) { show('Enter your full roster No. using digits only.', 'error'); input.focus(); return; }
     if (!attempt) attempt = {no, requestId: crypto.randomUUID()};
+    const requestId = attempt.requestId;
+    const startedAt = performance.now();
     remember({pending: attempt});
     input.value = String(no);
     busy = true;
@@ -84,22 +98,26 @@ if (params.has('round') && !params.has('cloud')) {
     const payload = {room, ...attempt};
     try {
       for (let number = 0; number < maxAttempts && isCurrent(); number++) {
+        const rpcStartedAt = performance.now();
         try {
           if (!client || reconnect) connect();
-          const result = await client.call('bonusJoin', payload);
+          const result = await client.call('bonusJoin', payload, {onDispatch:() => report('dispatch', {no,requestId,attemptNumber:number+1,dispatchAtMs:performance.timeOrigin+performance.now()})});
           if (!isCurrent()) return;
           if (result?.status !== 'joined' || result.no !== no) {
             const error = new Error('The service did not confirm this roster No.');
             error.invalidResult = true;
             throw error;
           }
+          report('attempt', {no,requestId,attemptNumber:number+1,rpcMs:performance.now()-rpcStartedAt,success:true,serverBusy:false});
           acceptedNo = result.no;
           attempt = null;
           remember({confirmed: acceptedNo});
           show(`You’re registered as No. ${acceptedNo}. You can now close this page.`, 'success');
+          report('confirmed', {no,requestId,totalMs:performance.now()-startedAt,pending:false});
           return;
         } catch (error) {
           if (!isCurrent()) return;
+          report('attempt', {no,requestId,attemptNumber:number+1,rpcMs:performance.now()-rpcStartedAt,success:false,serverBusy:error.serverConfirmed && transientMessages.has(error.message),message:error.message});
           const transient = !error.invalidResult && (!error.serverConfirmed || transientMessages.has(error.message));
           reconnect = !error.serverConfirmed;
           if (transient && number + 1 < maxAttempts) {
@@ -116,6 +134,7 @@ if (params.has('round') && !params.has('cloud')) {
             show(`No confirmation yet for No. ${no}. Retry the same registration. ${error.message}`, 'error');
           }
           retry.hidden = !attempt;
+          report('error', {no,requestId,totalMs:performance.now()-startedAt,pending:!!attempt,message:status.textContent});
           return;
         }
       }
@@ -123,6 +142,16 @@ if (params.has('round') && !params.has('cloud')) {
       if (isCurrent()) { busy = false; controls(); }
     }
   }
+  if (harness) window.addEventListener('message', event => {
+    const data = event.data;
+    if (event.source !== window.parent || event.origin !== location.origin || !data || data.type !== 'ierg2060-loadtest-submit' || data.runId !== harnessRun || data.clientId !== harnessClient) return;
+    const no = parseNo(data.no);
+    if (no === null || no > 35) return;
+    if (acceptedNo !== null) {report('confirmed', {no:acceptedNo,totalMs:0,pending:false,restored:true});return;}
+    if (busy || suspended || closed || (attempt && attempt.no !== no)) {report('error', {no,pending:!!attempt,message:'This student page already has a different or active registration.'});return;}
+    input.value = String(no);
+    void join();
+  });
   form.addEventListener('submit', event => { event.preventDefault(); join(); });
   retry.addEventListener('click', () => {
     if (attempt) join();
@@ -138,6 +167,7 @@ if (params.has('round') && !params.has('cloud')) {
     // Warm the bridge while students type. bonusJoin performs round validation.
     if (acceptedNo === null) connect();
     restoredStatus();
+    report('ready', {phase:'page'});
     window.addEventListener('pagehide', () => {
       suspended = true;
       run++;
@@ -156,5 +186,6 @@ if (params.has('round') && !params.has('cloud')) {
     closed = true;
     show(error.message, 'error');
     controls();
+    report('error', {pending:!!attempt,message:error.message});
   }
 }

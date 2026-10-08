@@ -1,3 +1,5 @@
+import {testMode as configuredTestMode} from './cloud-config.js?v=8';
+
 // Apps Script's HTML bridge handles Google requests without cross-origin fetch.
 export function cloudEndpoint(value) {
   const url = new URL(value);
@@ -5,9 +7,9 @@ export function cloudEndpoint(value) {
   return `${url.origin}${url.pathname}`;
 }
 
-export function createCloudClient(value,{getSessionToken}={}) {
+export function createCloudClient(value,{getSessionToken,testMode=configuredTestMode}={}) {
   const endpoint=cloudEndpoint(value),url=new URL(endpoint),channel=crypto.randomUUID();
-  url.search = new URLSearchParams({channel}).toString(); url.hash = '';
+  url.search = new URLSearchParams({channel,...(testMode === true ? {test:'1'} : {})}).toString(); url.hash = '';
   const frame = document.createElement('iframe');
   frame.hidden = true; frame.title = 'Google Sheets connection'; frame.src = url.href;
   let source = null, origin = null, stopped = false, stopError = null, readyResolve, readyReject;
@@ -27,7 +29,7 @@ export function createCloudClient(value,{getSessionToken}={}) {
     const data=event.data;
     if(!data || data.channel!==channel || stopped)return;
     if(!/^https:\/\/[a-z0-9-]+\.googleusercontent\.com$/.test(event.origin))return;
-    if(data.type==='ierg-ready'&&!source&&event.source){source=event.source;origin=event.origin;clearTimeout(timer);readyResolve();return;}
+    if(data.type==='ierg-ready'&&!source&&event.source){if(testMode===true&&data.environment!=='test'){stop(Error('The isolated Google test service is not deployed yet. Test mode cannot connect to the live dataset.'));return;}source=event.source;origin=event.origin;clearTimeout(timer);readyResolve();return;}
     if(event.source!==source||event.origin!==origin||data.type!=='ierg-rpc-result')return;
     const request=pending.get(data.id);if(!request)return;
     pending.delete(data.id);clearTimeout(request.timer);
@@ -35,7 +37,7 @@ export function createCloudClient(value,{getSessionToken}={}) {
     else request.resolve(data.result);
   }
   window.addEventListener('message',receive);document.body.append(frame);
-  return {endpoint,async call(action,payload={}, {anonymous=false}={}) {
+  return {endpoint,ready:()=>ready,async call(action,payload={}, {anonymous=false,onDispatch}={}) {
     if(stopped)throw stopError;
     await ready;
     if(stopped)throw stopError;
@@ -43,7 +45,7 @@ export function createCloudClient(value,{getSessionToken}={}) {
     return new Promise((resolve,reject)=>{
       const timer=setTimeout(()=>{pending.delete(id);reject(Error('No confirmation from Google Sheets. Retry to check the same request.'));},30000);
       pending.set(id,{resolve,reject,timer});
-      try{const message={type:'ierg-rpc',channel,id,action,payload};if(getSessionToken&&!anonymous)message.sessionToken=getSessionToken();source.postMessage(message,origin);}
+      try{const message={type:'ierg-rpc',channel,id,action,payload};if(getSessionToken&&!anonymous)message.sessionToken=getSessionToken();if(typeof onDispatch==='function')onDispatch({id,action});source.postMessage(message,origin);}
       catch(error){pending.delete(id);clearTimeout(timer);reject(error);}
     });
   },destroy(){stop(Error('Google Sheets connection closed.'));}};

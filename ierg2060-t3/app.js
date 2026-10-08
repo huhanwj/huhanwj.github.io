@@ -1,15 +1,18 @@
 import {fromSheet, validateState, migrateState, mergeRoster, round, eligible, parseAbsent, drawBatch} from './core.js?v=8';
 import {setupBonus} from './bonus.js?v=6';
-import {setupCloudBonus} from './cloud-bonus.js?v=10';
-import {createCloudClient, cloudEndpoint} from './cloud.js?v=9';
-import {readSession, beginSignIn, cancelSignIn, clearSession} from './auth.js?v=1';
-import {cloudDefaults} from './cloud-config.js?v=7';
+import {setupCloudBonus} from './cloud-bonus.js?v=11';
+import {createCloudClient, cloudEndpoint} from './cloud.js?v=10';
+import {readSession, beginSignIn, cancelSignIn, clearSession} from './auth.js?v=2';
+import {cloudDefaults, testMode, browserStateKey} from './cloud-config.js?v=8';
 
-const KEY='ierg2060-t3-v2', OLD_KEY='ierg2060-t3-v1', CLOUD='ierg2060-t3-cloud', LEGACY_SECRET='ierg2060-t3-cloud-key', PENDING='ierg2060-t3-pending', ANSWER='ierg2060-t3-answer', MINUTES='ierg2060-t3-minutes', LOCAL_ATTENDANCE='ierg2060-t3-attendance';
-const FINISHED='ierg2060-t3-finished-sessions';
+const [KEY,OLD_KEY,CLOUD,LEGACY_SECRET,PENDING,ANSWER,MINUTES,LOCAL_ATTENDANCE,FINISHED]=['ierg2060-t3-v2','ierg2060-t3-v1','ierg2060-t3-cloud','ierg2060-t3-cloud-key','ierg2060-t3-pending','ierg2060-t3-answer','ierg2060-t3-minutes','ierg2060-t3-attendance','ierg2060-t3-finished-sessions'].map(browserStateKey);
 let finishedDates=[];
 function sessionFinished(){return finishedDates.includes(sessionDate);}
 const $=id=>document.getElementById(id);
+$('test-banner').hidden=!testMode;
+$('environment-status').textContent=testMode?'Test mode · Google Sheets test dataset · 35 fictional students':'Live mode · class Google Sheets';
+$('mode-switch').textContent=testMode?'Switch to Live':'Switch to Test';
+if(testMode)document.title='TEST · IERG2060 · Tutorial 3';
 let state=null,incoming=null,bonus=null,writable=false,busy=false,cloud=null,endpoint='',studentEndpoint='',revision=0,connected=false,connecting=false,signingIn=false,pending=null,initial=null,sourceInitial=null,draft=null,absenceText=null,attendance=[],batchDates={},sessionDate=today(),recordsWarning="",revealing=false,questionText=null,answer=null,timerInterval=null;
 function today(){const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());return ['year','month','day'].map(key=>parts.find(p=>p.type===key).value).join('-');}
 function validDate(value){return typeof value==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(value+'T00:00:00Z'))&&new Date(value+'T00:00:00Z').toISOString().slice(0,10)===value;}
@@ -237,6 +240,16 @@ $('attendance-save').onclick=handle(()=>{
 $('records-refresh').onclick=handle(()=>exclusive(async()=>{cloudState(await call('recordsRefresh'));notice(recordsWarning||'Records updated.');}));
 $('absence-form').onsubmit=event=>{event.preventDefault();absenceText=$('absent').value;controls();};
 $('settings-open').onclick=()=>$('settings-dialog').showModal();
+$('mode-switch').onclick=handle(()=>{
+  if(busy||connecting||signingIn||revealing)throw Error('Wait for the current operation before switching modes.');
+  if(pending||bonus?.hasUnsavedResult())throw Error('Confirm the pending save before switching modes. Its request stays saved in this mode.');
+  if(draft||incoming||absenceText!==null||questionText!==null)throw Error('Save or cancel the current preview, import, or attendance edit before switching modes.');
+  if(answer)throw Error('Finish the current answer before switching modes.');
+  if(!endpoint&&(bonus?.isOpen()||bonus?.getEntrants().length))throw Error('Finish the local Bonus round before switching modes.');
+  const url=new URL(location.href);
+  if(testMode)url.searchParams.delete('mode');else url.searchParams.set('mode','test');
+  location.assign(url.href);
+});
 async function openBonus(){
   if($('bonus-open').disabled)return;
   if(answerBatch()&&answer.phase!=='bonus'){
@@ -277,7 +290,7 @@ $('backup').onclick=handle(()=>{if(!state)return;const url=URL.createObjectURL(n
 
 function installBonus(){
   bonus?.destroy?.();
-  if(endpoint&&connected)bonus=setupCloudBonus({container:$('bonus-container'),call,endpoint:studentEndpoint,getAbsent:()=>{const absent=absentInput();if(absent===null)throw Error('Check the absent numbers first.');return absent;},getStudentName:studentName,onState:cloudState,publicBaseUrl:new URL('./',location.href).href});
+  if(endpoint&&connected)bonus=setupCloudBonus({container:$('bonus-container'),call,endpoint:studentEndpoint,getAbsent:()=>{const absent=absentInput();if(absent===null)throw Error('Check the absent numbers first.');return absent;},getStudentName:studentName,onState:cloudState,testMode,publicBaseUrl:new URL('./',location.href).href});
   else if(!endpoint)bonus=setupBonus({container:$('bonus-container'),getStudentName:studentName,getEligibleNumbers:()=>state?state.students.filter(p=>!state.absent.includes(p.no)).map(p=>p.no):[],onWinner:result=>exclusive(()=>!state.bonus.some(b=>b.round===result.round)?save({...state,bonus:[...state.bonus,result]}):undefined),publicBaseUrl:new URL('./',location.href).href});
 }
 async function loadCloud(loaded){
@@ -304,7 +317,7 @@ async function connectOwner(signIn=false){
   connecting=true;connected=false;cloud?.destroy();cloud=null;controls();
   let proposed;
   try{
-    proposed=createCloudClient(publicUrl,{getSessionToken:()=>readSession()?.token??null});
+    proposed=createCloudClient(publicUrl,{testMode,getSessionToken:()=>readSession()?.token??null});
     if(signIn){
       signingIn=true;controls();
       // Open synchronously in the button click, before the bridge is awaited.
@@ -312,7 +325,10 @@ async function connectOwner(signIn=false){
       signingIn=false;controls();
     }
     if(!readSession())throw Error('Sign in with Google to load this class.');
-    const account=await proposed.call('auth'),result=await proposed.call('load');
+    const account=await proposed.call('auth');
+    if(testMode && account.environment!=='test')throw Error('The Google connection did not confirm the test dataset.');
+    const result=await proposed.call('load');
+    if(testMode && (result.environment!=='test'||result.state?.students?.length!==35))throw Error('The Google test dataset must contain 35 fictional students.');
     cloud=proposed;endpoint=adminUrl;studentEndpoint=publicUrl;connected=true;
     $('cloud-account').textContent=`Google account: ${account.email}`;
     await loadCloud(result);
@@ -337,6 +353,7 @@ async function activate(){
     try{const dates=JSON.parse(localStorage.getItem(FINISHED)||'[]');finishedDates=Array.isArray(dates)?dates.filter(validDate):[];}catch{finishedDates=[];}
     const saved=localStorage.getItem(KEY),legacy=localStorage.getItem(OLD_KEY);
     if(saved||legacy){cache(migrateState(JSON.parse(saved||legacy)));localStorage.removeItem(OLD_KEY);}
+    if(testMode&&!cloudDefaults.student)throw Error('The separate Google test connection is not deployed yet.');
     const config=cloudDefaults?JSON.stringify(cloudDefaults):localStorage.getItem(CLOUD);
     if(config){if(config.startsWith('https://'))endpoint=cloudEndpoint(config);else{const parsed=JSON.parse(config);endpoint=cloudEndpoint(parsed.admin);studentEndpoint=cloudEndpoint(parsed.student);}}
     pending=JSON.parse(localStorage.getItem(PENDING)||'null');

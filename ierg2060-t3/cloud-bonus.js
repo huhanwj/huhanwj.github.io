@@ -1,5 +1,5 @@
 // The service persists live registrations and archives the closed round to Sheets.
-export function setupCloudBonus({container, call, endpoint, getAbsent, getStudentName, onState, publicBaseUrl}) {
+export function setupCloudBonus({container, call, endpoint, getAbsent, getStudentName, onState, publicBaseUrl, testMode=false}) {
   if (!container || typeof call !== 'function') throw new Error('Bonus draw needs a container and cloud connection.');
   let room = null;
   let busy = false;
@@ -60,6 +60,7 @@ export function setupCloudBonus({container, call, endpoint, getAbsent, getStuden
     $('.bonus-share').hidden = !room?.open || !endpointUrl;
     if (room?.open && endpointUrl && shareKey !== `${endpointUrl}|${room.id}`) {
       const url = new URL('join.html', publicBaseUrl || new URL('./', location.href));
+      if(testMode)url.searchParams.set('mode','test');
       url.hash = new URLSearchParams({room: room.id}).toString();
       $('.bonus-link').href = url.href;
       $('.bonus-link').textContent = 'Open registration page ↗';
