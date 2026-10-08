@@ -308,7 +308,7 @@ async function activate(){
     $('cloud-url').value=endpoint;$('student-url').value=studentEndpoint;
     if(endpoint){
       $('cloud-status').textContent='Sign in with the authorized Google account to resume.';
-      if(studentEndpoint){if(readSession())await connectOwner();}
+      if(studentEndpoint){if(readSession())await connectOwner();else notice('Sign in with Google to load this class.');}
       else notice('Set the separate administrator and student URLs in Draw settings.');
     }else{attendance=JSON.parse(localStorage.getItem(LOCAL_ATTENDANCE)||'[]');installBonus();}
     if(answer&&!pending&&!answerBatch())clearAnswer();
