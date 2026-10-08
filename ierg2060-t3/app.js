@@ -4,12 +4,14 @@ import {setupCloudBonus} from './cloud-bonus.js?v=9';
 import {createCloudClient, cloudEndpoint} from './cloud.js?v=7';
 import {cloudDefaults} from './cloud-config.js?v=7';
 
-const KEY='ierg2060-t3-v2', OLD_KEY='ierg2060-t3-v1', CLOUD='ierg2060-t3-cloud', LEGACY_SECRET='ierg2060-t3-cloud-key', PENDING='ierg2060-t3-pending', ANSWER='ierg2060-t3-answer', MINUTES='ierg2060-t3-minutes';
+const KEY='ierg2060-t3-v2', OLD_KEY='ierg2060-t3-v1', CLOUD='ierg2060-t3-cloud', LEGACY_SECRET='ierg2060-t3-cloud-key', PENDING='ierg2060-t3-pending', ANSWER='ierg2060-t3-answer', MINUTES='ierg2060-t3-minutes', LOCAL_ATTENDANCE='ierg2060-t3-attendance';
 const $=id=>document.getElementById(id);
 let state=null,incoming=null,bonus=null,writable=false,busy=false,cloud=null,endpoint='',studentEndpoint='',revision=0,connected=false,pending=null,initial=null,sourceInitial=null,draft=null,absenceText=null,attendance=[],batchDates={},sessionDate=today(),recordsWarning="",revealing=false,questionText=null,answer=null,timerInterval=null;
 function today(){const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());return ['year','month','day'].map(key=>parts.find(p=>p.type===key).value).join('-');}
 function validDate(value){return typeof value==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(value+'T00:00:00Z'))&&new Date(value+'T00:00:00Z').toISOString().slice(0,10)===value;}
 function selectedAttendance(){return attendance.find(row=>row.date===sessionDate);}
+function attendanceReady(date,absent){const record=attendance.find(row=>row.date===date);return validDate(date)&&Array.isArray(absent)&&!!record&&record.absent.length===absent.length&&record.absent.every(no=>absent.includes(no));}
+function requireAttendance(date,absent){if(!attendanceReady(date,absent))throw Error('Save attendance for this class date before drawing.');}
 function dateInput(){const value=$('session-date').value;if(!validDate(value))throw Error('Choose a valid class date.');return value;}
 function notice(text,error=false){$('notice').textContent=text;$('notice').classList.toggle('error',error);$('notice').hidden=!text;if($('settings-dialog').open)$('settings-status').textContent=text;}
 function handle(fn){return async event=>{event?.preventDefault();try{await fn(event);}catch(error){notice(error.message,true);}finally{controls();}};}
@@ -21,6 +23,7 @@ function cloudState(result){
   if(Array.isArray(result.attendance))attendance=result.attendance;
   if(result.batchDates&&typeof result.batchDates==='object')batchDates=result.batchDates;
   if(typeof result.storageUrl==='string'&&/^https:\/\/docs\.google\.com\/spreadsheets\/d\/[\w-]+(?:[/?#]|$)/.test(result.storageUrl)){$('records-link').href=result.storageUrl;$('records-link').hidden=false;}
+  if(draft&&!attendanceReady(draft.sessionDate,draft.state.absent)){draft=null;clearAnswer();notice('Attendance changed. Check and save attendance before drawing again.',true);}
   recordsWarning=result.reportsWarning||'';
   $('records-warning').textContent=recordsWarning;$('records-warning').hidden=!recordsWarning;
   render();$('cloud-status').textContent=recordsWarning||'Saved in Google Sheets.';
@@ -28,7 +31,16 @@ function cloudState(result){
 async function call(action,payload={}){if(!cloud||!connected)throw Error('Connect Google Sheets in Draw settings.');return cloud.call(action,payload);}
 async function flushPending(){
   if(!pending)return;
-  let result;try{result=await call(pending.action||'save',pending);}catch(error){if(error.serverConfirmed&&/Cloud progress changed|already initialized/.test(error.message)){const latest=await call('load');if(latest.state){cloudState(latest);localStorage.removeItem(PENDING);pending=null;}throw Error('Cloud progress changed. The latest saved results are now loaded; the new draw or attendance change was not saved.');}throw error;}
+  let result;try{result=await call(pending.action||'save',pending);}catch(error){
+    const attendanceRejected=error.serverConfirmed&&/Save attendance for this class date before drawing|Choose a valid class date \(YYYY-MM-DD\)/.test(error.message);
+    if(attendanceRejected||(error.serverConfirmed&&/Cloud progress changed|already initialized/.test(error.message))){
+      const latest=await call('load');
+      if(latest.state){cloudState(latest);localStorage.removeItem(PENDING);pending=null;draft=null;if(answer&&!answerBatch())clearAnswer();absenceText=null;render();}
+      const rejected=Error(attendanceRejected?'The draw was not saved. Check and save attendance for this class date, then draw again.':'Cloud progress changed. The latest saved results are now loaded; the new draw or attendance change was not saved.');
+      rejected.saveRejected=true;throw rejected;
+    }
+    throw error;
+  }
   cloudState(result);localStorage.removeItem(PENDING);pending=null;
 }
 async function save(next,action='save',classDate){
@@ -40,7 +52,7 @@ async function save(next,action='save',classDate){
   if(!connected||initial)throw Error('Finish connecting Google Sheets in Draw settings.');
   const request={action,state:clean,revision,requestId:crypto.randomUUID(),...(classDate?{sessionDate:classDate}:{})};
   localStorage.setItem(PENDING,JSON.stringify(request));pending=request;
-  try{await flushPending();}catch(error){$('cloud-status').textContent='Save not confirmed. Retry saving before continuing.';throw error;}
+  try{await flushPending();}catch(error){$('cloud-status').textContent=error.saveRejected?'The change was not saved. Review the latest records before continuing.':'Save not confirmed. Retry saving before continuing.';throw error;}
 }
 function answerBatch(){return answer&&state?.batches.find(b=>b.id===answer.batchId);}
 function durationMinutes(){const minutes=Number($('answer-minutes').value);if(!Number.isInteger(minutes)||minutes<1||minutes>180)throw Error('Enter a whole number of minutes from 1 to 180.');return minutes;}
@@ -67,12 +79,14 @@ function restoreAnswer(){
 }
 async function revealStudent({absent=absentInput(),question=questionNumber(),date=dateInput(),exclude=null}={}){
   if(absent===null)return;
+  requireAttendance(date,absent);
   const drawAbsences=exclude===null?absent:[...new Set([...absent,exclude])];
   const next=drawBatch({...state,absent:drawAbsences},1,question);next.absent=absent.slice();
   draft={state:next,revision,sessionDate:date};
   revealing=true;$('announcement').textContent='Drawing one student.';notice('');render();
   try{if(!window.matchMedia('(prefers-reduced-motion: reduce)').matches)await new Promise(resolve=>setTimeout(resolve,1100));}
   finally{revealing=false;render();}
+  if(!draft)return;
   const batch=draft.state.batches.at(-1);
   $('announcement').textContent=`Question ${batch.questionStart}: No. ${batch.numbers[0]} ${studentName(batch.numbers[0])}`;
 }
@@ -88,9 +102,10 @@ function absentInput(){try{const absent=parseAbsent($('absent').value,state?.stu
 function controls(){
   const absent=absentInput(),q=state?round(state):0,pool=state&&absent?eligible({...state,absent}):[];
   let n=0;try{n=questionNumber();}catch{}
+  const attendanceSaved=attendanceReady($('session-date').value,absent);
   const locked=revealing||busy||!!pending||!!initial||!!endpoint&&!connected||!writable;
-  $('draw').disabled=locked||!!answer||!!draft||!state||!pool.length||!n||absent===null||!validDate($('session-date').value);
-  $('draw-label').textContent=revealing?'Drawing…':busy?'Saving…':'Draw one student';
+  $('draw').disabled=locked||!!answer||!!draft||!state||!pool.length||!n||absent===null||!attendanceSaved;
+  $('draw-label').textContent=revealing?'Drawing…':busy?'Saving…':!attendanceSaved?'Save attendance first':'Draw one student';
   $('pool-count').replaceChildren(document.createTextNode(`${pool.length} `));const small=document.createElement('small');small.textContent='available';$('pool-count').append(small);
   $('next-round').textContent=q===2?'BOTH ROUNDS DRAWN':'ELIGIBLE STUDENTS';
   $('session-date').disabled=locked||!!draft||!!answer;$('question').disabled=locked||!!draft||!!answer;$('absent').disabled=locked||!!draft||!!answer;$('backup').disabled=!state;$('bonus-open').disabled=locked||!!draft||!!answer||!state||absent===null||!!endpoint&&!studentEndpoint;
@@ -113,14 +128,14 @@ function controls(){
   $('draw-save').disabled=revealing||busy||!writable||!!endpoint&&!connected||!!initial||!minutesValid||!!answer?.deadline||(!draft&&!drawPending&&!answerBatch());
   $('draw-cancel').disabled=revealing||busy||!!pending||!draft||pool.length<2;
   $('answer-next').disabled=revealing||busy||!!pending||!answerBatch();
-  $('draw-save-status').textContent=drawPending?'Save not confirmed. Retry Start to keep this same student.':draft?'Start saves this draw and attendance, then begins the timer.':answer?.deadline?'Draw saved. Next student ends this turn and draws the next student.':answer?'Draw saved. Click Start to begin the timer.':'';
+  $('draw-save-status').textContent=drawPending?'Save not confirmed. Retry Start to keep this same student.':draft?'Start saves this draw, then begins the timer.':answer?.deadline?'Draw saved. Next student ends this turn and draws the next student.':answer?'Draw saved. Click Start to begin the timer.':'';
   timerTick();
   const attendancePending=pending?.action==='attendanceSave';
   $('attendance-save').textContent=attendancePending?'Retry attendance save':'Save attendance';
-  $('attendance-save').disabled=attendancePending?(busy||!connected):locked||!!draft||!state||!connected||absent===null||!validDate($('session-date').value);
+  $('attendance-save').disabled=attendancePending?(busy||!connected):locked||!!draft||!!answer||!state||!!endpoint&&!connected||absent===null||!validDate($('session-date').value);
   $('records-refresh').disabled=locked||!!draft;$('records-refresh').hidden=!connected;
-  const record=selectedAttendance(),same=record&&JSON.stringify(record.absent)===JSON.stringify(absent);
-  $('attendance-status').textContent=attendancePending?'Save not confirmed. Retry the same attendance record.':!validDate(sessionDate)?'Choose a valid class date.':record?(same?`${sessionDate}: saved · ${state.students.length-record.absent.length} present · ${record.absent.length} absent`:`${sessionDate}: unsaved attendance changes`):`${sessionDate}: attendance not saved. Blank absent list means everyone is present.`;
+  const record=selectedAttendance(),same=attendanceSaved;
+  $('attendance-status').textContent=attendancePending?'Save not confirmed. Retry the same attendance record.':!validDate(sessionDate)?'Choose a valid class date.':record?(same?`${sessionDate}: saved · ${state.students.length-record.absent.length} present · ${record.absent.length} absent`:`${sessionDate}: attendance changed. Save attendance before drawing.`):`${sessionDate}: save attendance before drawing. Leave Absent empty if everyone is present.`;
 
 }
 function render(){
@@ -151,8 +166,9 @@ $('draw-save').onclick=handle(()=>{
       if(pending)await flushPending();
       else{
         if(draft.revision!==revision){draft=null;clearAnswer();throw Error('Cloud progress changed. Draw again using the latest records.');}
+        requireAttendance(draft.sessionDate,draft.state.absent);
         const preview=draft;draft=null;
-        try{await save(preview.state,'save',preview.sessionDate);}catch(error){if(!pending&&revision===preview.revision&&!answerBatch())draft=preview;throw error;}
+        try{await save(preview.state,'save',preview.sessionDate);}catch(error){if(!error.saveRejected&&!pending&&revision===preview.revision&&!answerBatch())draft=preview;throw error;}
       }
       absenceText=null;questionText=null;startTimer();notice('');
     }catch(error){if(!pending&&!draft&&!answerBatch())clearAnswer();throw error;}
@@ -183,10 +199,14 @@ $('attendance-save').onclick=handle(()=>{
   if($('attendance-save').disabled)return;
   return exclusive(async()=>{
     if(pending?.action==='attendanceSave'){try{await flushPending();absenceText=null;notice('Attendance saved.');}finally{render();}return;}
-    if(draft||pending||!connected||!writable||initial)return;
+    if(draft||pending||answer||!!endpoint&&!connected||!writable||initial)return;
     const date=dateInput(),absent=absentInput();if(absent===null)return;
-    pending={action:'attendanceSave',date,absent,revision,requestId:crypto.randomUUID()};
-    localStorage.setItem(PENDING,JSON.stringify(pending));
+    if(!endpoint){
+      const next=[...attendance.filter(row=>row.date!==date),{date,absent,savedAt:new Date().toISOString()}];
+      localStorage.setItem(LOCAL_ATTENDANCE,JSON.stringify(next));attendance=next;absenceText=null;notice('Attendance saved in this browser.');render();return;
+    }
+    const request={action:'attendanceSave',date,absent,revision,requestId:crypto.randomUUID()};
+    localStorage.setItem(PENDING,JSON.stringify(request));pending=request;
     try{await flushPending();absenceText=null;notice('Attendance saved.');}finally{render();}
   });
 });
@@ -266,7 +286,7 @@ async function activate(){
       $('cloud-status').textContent='Sign in with the authorized Google account to resume.';
       if(studentEndpoint){cloud=createCloudClient(endpoint);const account=await cloud.call('auth');connected=true;$('cloud-account').textContent=`Google account: ${account.email}`;await loadCloud();installBonus();await bonus?.refresh?.();}
       else notice('Set the separate administrator and student URLs in Draw settings.');
-    }else installBonus();
+    }else{attendance=JSON.parse(localStorage.getItem(LOCAL_ATTENDANCE)||'[]');installBonus();}
     if(answer&&!pending&&!answerBatch())clearAnswer();
     if(answer?.deadline&&answerBatch())startTimer();
     if(state&&!initial&&(!endpoint||connected))notice('');render();

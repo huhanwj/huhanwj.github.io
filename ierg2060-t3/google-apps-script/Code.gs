@@ -94,10 +94,18 @@ function rpc(action, payload) {
         next.bonus = document.state.bonus;
         forwardOnly_(document.state, next);
       }
-      if (action === 'save' && Object.prototype.hasOwnProperty.call(payload, 'sessionDate')) {
-        const date = date_(payload.sessionDate);
-        saveAttendance_(document, date, next.absent);
-        next.batches.slice(document.state.batches.length).forEach(b => {Object.defineProperty(document.batchDates,b.id,{value:date,enumerable:true,configurable:true,writable:true});});
+      if (action === 'save') {
+        const added = next.batches.slice(document.state.batches.length);
+        const date = added.length || Object.prototype.hasOwnProperty.call(payload, 'sessionDate') ? date_(payload.sessionDate) : null;
+        if (added.length) {
+          const attendance = document.attendance.find(row => row.date === date);
+          if (!attendance) throw Error('Save attendance for this class date before drawing.');
+          const absent = attendance.absent.slice().sort((a,b) => a-b);
+          if (JSON.stringify(absent) !== JSON.stringify(next.absent)) throw Error('Attendance changed. Save attendance for this class date before drawing.');
+          // Only attendanceSave can create/correct attendance. Drawing uses its
+          // already committed exclusion list and dates only the new batches.
+          added.forEach(b => {Object.defineProperty(document.batchDates,b.id,{value:date,enumerable:true,configurable:true,writable:true});});
+        }
       }
       document.state = next;
       document.revision++;
