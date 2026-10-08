@@ -34,14 +34,16 @@ Every action except `bonusJoin` and `bonusInfo` checks the server-provided activ
 | `load` | — | `{state,revision,roster}`; state is `null` until initialized |
 | `names` | — | `{roster}` |
 | `initialize` | `state,revision,requestId` | `{state,revision}`; cloud must be empty |
-| `save` | `state,revision,requestId` | `{state,revision}` |
+| `save` | `state,revision,requestId`, optional `sessionDate` | `{state,revision}` and owner metadata |
+| `attendanceSave` | `date,absent,revision,requestId` | Saves/corrects attendance for the date; participation unchanged |
+| `recordsRefresh` | — | Rebuilds private report tabs; canonical revision unchanged |
 | `bonusOpen` | `absent,requestId` | `{room}` |
 | `bonusStatus` | — | `{room}`; room may be `null` |
 | `bonusClose` | `room,requestId` | `{room}` |
 | `bonusRemove` | `room,no,requestId` | `{room}` |
 | `bonusDraw` | `room,requestId` | `{state,revision,room}` |
 | `bonusReset` | `room,requestId` | `{room:null}` |
-| `bonusJoin` (public) | `room,no` | `{status:'joined',no,duplicate}` |
+| `bonusJoin` (public) | `room,no` | `{status:'joined',no}` |
 | `bonusInfo` (public) | `room` | `{id,open}` |
 
 `roster` contains `{no,name,q:[boolean,boolean]}`. Version 2 state contains `{version,students,absent,batches,bonus}`; student names are resolved from the private snapshot by the server. An admin room contains `{id,open,entrants:[number],winner:null|{no,name},absent:[number],drawnAt:null|ISO}`. The student endpoints never return the roster or registration list. Students self-report a roster number; this does not authenticate their identity. Duplicate numbers count once, and the instructor can remove an erroneous entry before drawing.
@@ -54,7 +56,11 @@ The private `State!A1` JSON is authoritative. A script lock serializes updates a
 
 The last 30 admin mutation request IDs are retained. Reusing an ID with a different payload is rejected. Once an older ID leaves the window, revision checks still reject an old formal save, and the persisted room prevents a second draw. A result from an expired Bonus room fails rather than drawing again.
 
-The `Draw log` tab is derived from canonical state and contains only numbers, names, rounds, and timestamps. If this readable log fails to refresh, canonical progress remains committed. Reload or the next successful mutation refreshes displayed cloud state; the next mutation regenerates the log. Do not edit `State!A1` manually. Export the browser's JSON backup before administrative recovery. The backend refuses a canonical cell larger than 45,000 characters instead of truncating history.
+Attendance is stored alongside state as `attendance:[{date,absent,savedAt}]`; `batchDates` maps new batch IDs to explicitly supplied class dates. Existing documents default to empty metadata. `attendanceSave` validates a real `YYYY-MM-DD` date and known unique roster numbers, upserts that date, updates the current exclusion list, and increments revision without changing participation or batches. A formal `save` with `sessionDate` commits the draw and attendance together and dates only new batches. Saves without a date never manufacture attendance. Owner load/mutation responses include these records, the private `storageUrl`, and recent `requestIds` for exact receipt recovery. None are returned by public actions.
+
+Run owner-only `refreshRecords()` in the editor after upgrading, or use **Refresh record sheets** on the website. The private **出勤记录** view has one student per row and one saved date per column; **讲题记录** lists question positions, class dates and historical participation; **学生名单** summarizes participation. Headers and student identity columns are frozen. Historical dates and attendance are left unknown. The original `State`, `Roster`, and compatibility `Draw log` sheets are preserved but hidden. Attendance corrections belong in the website; generated report cells are overwritten by the next refresh. Bonus uses its own attendance snapshot and does not inherit an earlier class’s saved exclusion list.
+
+Report refresh follows a successful canonical commit. If it fails, the response includes `reportsWarning`; the save remains committed and its request receipt retained. Retry **Refresh record sheets** to rebuild the views. Public signup does not regenerate reports. Do not edit `State!A1` manually. Export the browser’s JSON backup (including attendance and batch dates) before administrative recovery. The backend refuses a canonical cell larger than 45,000 characters instead of truncating history.
 
 Keep the admin deployment set to **Only myself**, the student deployment set to **Anyone**, and both set to execute as `huhanwj@gmail.com`. Google account access controls protect the instructor session. Never make the private storage spreadsheet public.
 

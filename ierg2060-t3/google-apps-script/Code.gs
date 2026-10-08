@@ -14,7 +14,7 @@ function setup_() {
   if (!id) {
     const book = SpreadsheetApp.create('IERG2060 Tutorial 3 — private draw progress');
     book.getSheets()[0].setName('State');
-    book.getSheetByName('State').getRange('A1').setValue(JSON.stringify({revision:0,state:null,room:null,requests:[]}));
+    book.getSheetByName('State').getRange('A1').setValue(JSON.stringify({revision:0,state:null,room:null,requests:[],attendance:[],batchDates:{}}));
     book.insertSheet('Draw log');
     id = book.getId();
     properties.setProperty('STORE_ID', id);
@@ -37,9 +37,10 @@ function setup_() {
     }
   }
   roster_();
-  const storageUrl = 'https://docs.google.com/spreadsheets/d/' + id;
-  console.log('Private storage: ' + storageUrl);
-  return {storageUrl:storageUrl};
+  const document = read_();
+  const reportsWarning = refreshReports_(book, document);
+  console.log('Private storage: ' + storageUrl_());
+  return Object.assign(ownerMetadata_(document), reportsWarning ? {reportsWarning:reportsWarning} : {});
 }
 
 function doGet(e) {
@@ -61,16 +62,17 @@ function rpc(action, payload) {
   const email = authenticate_();
   if (Object.prototype.hasOwnProperty.call(payload, 'adminKey') || Object.prototype.hasOwnProperty.call(payload, 'email')) throw Error('Account credentials must not be supplied in a cloud request.');
   if (action === 'auth') return {ok:true,email:email};
-  if (action === 'names') return {roster:roster_()};
+  if (action === 'names') return locked_(function () {return Object.assign({roster:roster_()}, ownerMetadata_(read_()));});
   if (action === 'load') {
     return locked_(function () {
       const document = read_(), roster = roster_();
       if (document.state) refreshNames_(document.state, roster);
-      return {state:document.state,revision:document.revision,roster:roster};
+      return Object.assign({state:document.state,revision:document.revision,roster:roster}, ownerMetadata_(document));
     });
   }
-  if (action === 'bonusStatus') return locked_(function () {return {room:read_().room};});
-  if (!['initialize','save','bonusOpen','bonusClose','bonusDraw','bonusReset','bonusRemove'].includes(action)) throw Error('Unknown cloud action.');
+  if (action === 'recordsRefresh') return locked_(refreshRecords_);
+  if (action === 'bonusStatus') return locked_(function () {const document=read_();return Object.assign({room:document.room}, ownerMetadata_(document));});
+  if (!['initialize','save','attendanceSave','bonusOpen','bonusClose','bonusDraw','bonusReset','bonusRemove'].includes(action)) throw Error('Unknown cloud action.');
   return locked_(function () {
     const document = read_();
     const requestId = token_(payload.requestId, 'A requestId is required.');
@@ -92,7 +94,19 @@ function rpc(action, payload) {
         next.bonus = document.state.bonus;
         forwardOnly_(document.state, next);
       }
+      if (action === 'save' && Object.prototype.hasOwnProperty.call(payload, 'sessionDate')) {
+        const date = date_(payload.sessionDate);
+        saveAttendance_(document, date, next.absent);
+        next.batches.slice(document.state.batches.length).forEach(b => {Object.defineProperty(document.batchDates,b.id,{value:date,enumerable:true,configurable:true,writable:true});});
+      }
       document.state = next;
+      document.revision++;
+    } else if (action === 'attendanceSave') {
+      if (!document.state) throw Error('Initialize cloud progress first.');
+      if (payload.revision !== document.revision) throw Error('Cloud progress changed. Reload before saving.');
+      const absent = numbers_(payload.absent, new Set(document.state.students.map(p => p.no)), true).sort((a,b) => a-b);
+      saveAttendance_(document, date_(payload.date), absent);
+      document.state.absent = absent;
       document.revision++;
     } else if (action === 'bonusOpen') {
       if (!document.state) throw Error('Initialize cloud progress first.');
@@ -117,7 +131,7 @@ function rpc(action, payload) {
           if (room.open) throw Error('Close Bonus registration before drawing.');
           const roster = roster_();
           refreshNames_(document.state, roster);
-          const absent = new Set(room.absent.concat(document.state.absent));
+          const absent = new Set(room.absent);
           const eligible = new Set(document.state.students.filter(p => !absent.has(p.no)).map(p => p.no));
           room.entrants = room.entrants.filter(no => eligible.has(no)).sort((a,b) => a-b);
           if (!room.entrants.length) throw Error('There are no eligible Bonus entries.');
@@ -134,8 +148,10 @@ function rpc(action, payload) {
     }
     document.requests.push({id:requestId,fingerprint:fingerprint,room:roomReceipt || null});
     document.requests = document.requests.slice(-30);
-    write_(document);
-    return result_(document, action, roomReceipt);
+    const reportsWarning = write_(document, true);
+    const result = result_(document, action, roomReceipt);
+    if (reportsWarning) result.reportsWarning=reportsWarning;
+    return result;
   });
 }
 
@@ -200,21 +216,26 @@ function read_() {
   const text = book_().getSheetByName('State').getRange('A1').getValue();
   const document = JSON.parse(text);
   if (!document || !Number.isSafeInteger(document.revision) || !Array.isArray(document.requests)) throw Error('Private cloud state is invalid. Ask the instructor to recover it.');
+  // Older documents have no dated attendance. Never derive it from draw history.
+  if (document.attendance === undefined) document.attendance=[];
+  if (document.batchDates === undefined) document.batchDates={};
+  validateRecords_(document);
   return document;
 }
-function write_(document) {
+function write_(document, reports) {
   const serialized = JSON.stringify(document);
   if (serialized.length > 45000) throw Error('Cloud history is full. Export a backup and ask the owner to archive it.');
   const book = book_();
   book.getSheetByName('State').getRange('A1').setValue(serialized);
   SpreadsheetApp.flush();
-  // A display-log failure must not turn a committed result into a redraw.
-  try {log_(book, document.state);} catch (error) {console.warn('Draw log refresh failed: ' + error.message);}
+  // Display failures happen after the canonical commit, and must never trigger a redraw.
+  return reports ? refreshReports_(book, document) : null;
 }
 function result_(document, action, roomReceipt) {
-  if (action === 'initialize' || action === 'save') return {state:document.state,revision:document.revision};
-  if (action === 'bonusDraw') return {state:document.state,revision:document.revision,room:roomReceipt || document.room};
-  return {room:roomReceipt || document.room};
+  const metadata = ownerMetadata_(document);
+  if (action === 'initialize' || action === 'save' || action === 'attendanceSave') return Object.assign({state:document.state,revision:document.revision}, metadata);
+  if (action === 'bonusDraw') return Object.assign({state:document.state,revision:document.revision,room:roomReceipt || document.room}, metadata);
+  return Object.assign({room:roomReceipt || document.room}, metadata);
 }
 function requireRoom_(document, id) {
   if (!document.room || document.room.id !== id) throw Error('This Bonus link has expired. Ask for the latest QR code.');
@@ -226,7 +247,7 @@ function join_(document, payload) {
   // A retry can recover an accepted receipt even after registration closes.
   if (room.entrants.includes(no)) return {status:'joined',no:no};
   if (!room.open || room.winner) throw Error('Bonus registration is closed.');
-  if (!Number.isSafeInteger(no) || !document.state.students.some(p => p.no === no) || room.absent.includes(no) || document.state.absent.includes(no)) throw Error('This roster No. cannot join. Check with the instructor.');
+  if (!Number.isSafeInteger(no) || !document.state.students.some(p => p.no === no) || room.absent.includes(no)) throw Error('This roster No. cannot join. Check with the instructor.');
   room.entrants.push(no);room.entrants.sort((a,b) => a-b);write_(document);
   return {status:'joined',no:no};
 }
@@ -364,4 +385,147 @@ function log_(book,state) {
   sheet.clearContents();
   sheet.getRange(1,1,rows.length,7).setValues(rows.map(row => row.map(v => typeof v === 'string' && /^[=+\-@]/.test(v) ? "'"+v : v)));
   sheet.setFrozenRows(1);
+}
+
+function date_(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) throw Error('Choose a valid class date (YYYY-MM-DD).');
+  const parsed = new Date(value + 'T00:00:00.000Z');
+  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0,10) !== value) throw Error('Choose a valid class date (YYYY-MM-DD).');
+  return value;
+}
+function saveAttendance_(document, date, absent) {
+  const index = document.attendance.findIndex(row => row.date === date);
+  if (index < 0 && document.attendance.length >= 500) throw Error('Attendance history is full. Export a backup and ask the owner to archive it.');
+  const row = {date:date,absent:absent.slice(),savedAt:new Date().toISOString()};
+  if (index < 0) document.attendance.push(row);
+  else document.attendance[index]=row;
+  document.attendance.sort((a,b) => a.date.localeCompare(b.date));
+}
+function validateRecords_(document) {
+  const invalid = () => {throw Error('Private attendance metadata is invalid. Ask the instructor to recover it.');};
+  if (!Array.isArray(document.attendance) || document.attendance.length > 500 || !document.batchDates || typeof document.batchDates !== 'object' || Array.isArray(document.batchDates)) invalid();
+  const known = new Set((document.state ? document.state.students : []).map(p => p.no));
+  const dates = new Set();
+  document.attendance.forEach(row => {
+    if (!row || dates.has(row.date)) invalid();
+    date_(row.date);
+    dates.add(row.date);
+    numbers_(row.absent, known, true);
+    time_(row.savedAt);
+  });
+  const batches = new Set((document.state ? document.state.batches : []).map(b => b.id));
+  Object.keys(document.batchDates).forEach(id => {
+    if (!batches.has(id)) invalid();
+    date_(document.batchDates[id]);
+  });
+}
+function storageUrl_() {
+  const id = PropertiesService.getScriptProperties().getProperty('STORE_ID');
+  if (!id) throw Error('Cloud setup is incomplete. The owner must run setup.');
+  return 'https://docs.google.com/spreadsheets/d/' + id;
+}
+function ownerMetadata_(document) {
+  return {attendance:document.attendance,batchDates:document.batchDates,storageUrl:storageUrl_(),requestIds:document.requests.map(row => row.id)};
+}
+// Run once in the Apps Script editor after updating an existing deployment.
+function refreshRecords() {
+  authenticate_();
+  return locked_(refreshRecords_);
+}
+function refreshRecords_() {
+  const document = read_();
+  const reportsWarning = refreshReports_(book_(), document);
+  return Object.assign({state:document.state,revision:document.revision}, ownerMetadata_(document), reportsWarning ? {reportsWarning:reportsWarning} : {});
+}
+function refreshReports_(book, document) {
+  try {
+    reports_(book, document);
+    log_(book, document.state);
+    SpreadsheetApp.flush();
+    return null;
+  } catch (error) {
+    console.warn('Private record display refresh failed: ' + (error && error.stack || String(error)));
+    return 'Cloud progress is saved. The readable record sheets could not refresh; use Refresh records to retry.';
+  }
+}
+function reportTime_(value) {
+  return value ? Utilities.formatDate(new Date(value), 'Asia/Hong_Kong', 'yyyy-MM-dd HH:mm:ss') : '';
+}
+function reportSheet_(book, name, title, note, headers, rows) {
+  let sheet = book.getSheetByName(name);
+  if (!sheet) sheet=book.insertSheet(name);
+  const height = Math.max(5, rows.length+4), width = headers.length;
+  if (sheet.getMaxRows() < height) sheet.insertRowsAfter(sheet.getMaxRows(), height-sheet.getMaxRows());
+  if (sheet.getMaxColumns() < width) sheet.insertColumnsAfter(sheet.getMaxColumns(), width-sheet.getMaxColumns());
+  // All cells are generated views; the website is the supported editor.
+  sheet.getRange(1,1,sheet.getMaxRows(),sheet.getMaxColumns()).breakApart();
+  sheet.clear();
+  const literal = value => typeof value === 'string' && /^[=+\-@]/.test(value) ? "'"+value : value;
+  sheet.getRange(1,1).setValue(title).setFontSize(18).setFontWeight('bold').setFontColor('#173d45');
+  sheet.getRange(2,1).setValue(note).setFontSize(10).setFontColor('#536b70');
+  sheet.getRange(4,1,1,width).setValues([headers]).setFontWeight('bold').setBackground('#173d45').setFontColor('#ffffff').setWrap(true);
+  if (rows.length) sheet.getRange(5,1,rows.length,width).setValues(rows.map(row => row.map(literal))).setFontColor('#173d45').setWrap(true);
+  sheet.getRange(4,1,height-3,width).setVerticalAlignment('middle');
+  sheet.setFrozenRows(4);
+  sheet.setFrozenColumns(2);
+  sheet.setColumnWidth(1,70);
+  sheet.setColumnWidth(2,240);
+  if (width > 2) sheet.setColumnWidths(3,width-2,115);
+  sheet.setRowHeight(1,32);
+  sheet.setRowHeight(2,36);
+  sheet.setRowHeight(4,40);
+  if (rows.length) {
+    sheet.setRowHeights(5,rows.length,42);
+    sheet.autoResizeRows(5,rows.length);
+  }
+  sheet.showSheet();
+  return sheet;
+}
+function reports_(book, document) {
+  const roster = roster_();
+  const students = document.state ? document.state.students : roster;
+  if (document.state) refreshNames_(document.state, roster);
+  const byNo = new Map(students.map(p => [p.no,p]));
+  const attendance = document.attendance.slice().sort((a,b) => a.date.localeCompare(b.date));
+  const absentByDate = attendance.map(row => new Set(row.absent));
+  const attendanceRows = students.map(p => {
+    const absentCount = absentByDate.filter(absent => absent.has(p.no)).length;
+    return [p.no,p.name,attendance.length-absentCount,absentCount].concat(absentByDate.map(absent => absent.has(p.no) ? '缺席' : '到场'));
+  });
+  const attendanceSheet = reportSheet_(book, '出勤记录', 'Tutorial 3 · 出勤记录',
+    '仅统计网站明确保存的课堂日期；同一天再次保存会更新该日记录。' + (attendance.length ? '' : '目前没有已保存的出勤日期。') + '请在网站维护，表格改动会被覆盖。',
+    ['No.','Name','到场次数','缺席次数'].concat(attendance.map(row => row.date)), attendanceRows);
+  if (attendance.length && students.length) {
+    const backgrounds = attendanceRows.map(row => row.slice(4).map(value => value === '缺席' ? '#fde8df' : '#e6f2ed'));
+    attendanceSheet.getRange(5,5,students.length,attendance.length).setBackgrounds(backgrounds);
+  }
+  const history = [], drawn = new Set();
+  if (document.state) {
+    document.state.batches.forEach((batch,index) => batch.numbers.forEach((no,question) => {
+      drawn.add(batch.q+':'+no);
+      history.push([no,byNo.get(no).name,document.batchDates[batch.id] || '',index+1,question+1,batch.q+1,'课堂讲题',reportTime_(batch.at)]);
+    }));
+    document.state.bonus.forEach((bonus,index) => history.push([bonus.no,byNo.get(bonus.no).name,'',index+1,'','','Bonus',reportTime_(bonus.drawnAt)]));
+  }
+  students.forEach(student => student.q.forEach((completed,q) => {
+    if (completed && !drawn.has(q+':'+student.no)) history.push([student.no,student.name,'','','',q+1,'历史参与（未记录题目）','']);
+  }));
+  const questionSheet = reportSheet_(book, '讲题记录', 'Tutorial 3 · 讲题记录',
+    '课堂日期仅来自网站明确保存的日期。历史参与没有日期、批次或题目分配；保存时间为香港时间。请在网站维护，表格改动会被覆盖。',
+    ['No.','Name','课堂日期','批次序号','批次内题号','参与轮次','类型','保存时间（香港）'], history);
+  questionSheet.setColumnWidth(7,190);
+  questionSheet.setColumnWidth(8,185);
+  const rosterRows = students.map(p => [p.no,p.name,p.q[0] ? '已参与' : '待参与',p.q[1] ? '已参与' : '待参与',p.q.filter(Boolean).length]);
+  const rosterSheet = reportSheet_(book, '学生名单', 'Tutorial 3 · 学生名单',
+    '参与次数为两轮课堂参与的合计，包含历史参与。出勤请查看已保存日期的出勤记录。请在网站维护，表格改动会被覆盖。',
+    ['No.','Name','第一轮参与','第二轮参与','参与次数'], rosterRows);
+  [attendanceSheet,questionSheet,rosterSheet].forEach((sheet,index) => {
+    book.setActiveSheet(sheet);
+    book.moveActiveSheet(index+1);
+  });
+  ['State','Roster','Draw log'].forEach(name => {
+    const sheet=book.getSheetByName(name);
+    if (sheet) sheet.hideSheet();
+  });
+  book.setActiveSheet(attendanceSheet);
 }
