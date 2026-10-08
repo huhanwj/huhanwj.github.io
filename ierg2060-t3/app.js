@@ -4,9 +4,9 @@ import {setupCloudBonus} from './cloud-bonus.js?v=9';
 import {createCloudClient, cloudEndpoint} from './cloud.js?v=7';
 import {cloudDefaults} from './cloud-config.js?v=7';
 
-const KEY='ierg2060-t3-v2', OLD_KEY='ierg2060-t3-v1', CLOUD='ierg2060-t3-cloud', LEGACY_SECRET='ierg2060-t3-cloud-key', PENDING='ierg2060-t3-pending';
+const KEY='ierg2060-t3-v2', OLD_KEY='ierg2060-t3-v1', CLOUD='ierg2060-t3-cloud', LEGACY_SECRET='ierg2060-t3-cloud-key', PENDING='ierg2060-t3-pending', ANSWER='ierg2060-t3-answer', MINUTES='ierg2060-t3-minutes';
 const $=id=>document.getElementById(id);
-let state=null,incoming=null,bonus=null,writable=false,busy=false,cloud=null,endpoint='',studentEndpoint='',revision=0,connected=false,pending=null,initial=null,sourceInitial=null,draft=null,absenceText=null,attendance=[],batchDates={},sessionDate=today(),recordsWarning="",revealing=false,questionText=null;
+let state=null,incoming=null,bonus=null,writable=false,busy=false,cloud=null,endpoint='',studentEndpoint='',revision=0,connected=false,pending=null,initial=null,sourceInitial=null,draft=null,absenceText=null,attendance=[],batchDates={},sessionDate=today(),recordsWarning="",revealing=false,questionText=null,answer=null,timerInterval=null;
 function today(){const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());return ['year','month','day'].map(key=>parts.find(p=>p.type===key).value).join('-');}
 function validDate(value){return typeof value==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(value+'T00:00:00Z'))&&new Date(value+'T00:00:00Z').toISOString().slice(0,10)===value;}
 function selectedAttendance(){return attendance.find(row=>row.date===sessionDate);}
@@ -38,9 +38,43 @@ async function save(next,action='save',classDate){
   const clean=validateState(next);
   if(!endpoint){cache(clean);return;}
   if(!connected||initial)throw Error('Finish connecting Google Sheets in Draw settings.');
-  pending={action,state:clean,revision,requestId:crypto.randomUUID(),...(classDate?{sessionDate:classDate}:{})};
-  localStorage.setItem(PENDING,JSON.stringify(pending));
+  const request={action,state:clean,revision,requestId:crypto.randomUUID(),...(classDate?{sessionDate:classDate}:{})};
+  localStorage.setItem(PENDING,JSON.stringify(request));pending=request;
   try{await flushPending();}catch(error){$('cloud-status').textContent='Save not confirmed. Retry saving before continuing.';throw error;}
+}
+function answerBatch(){return answer&&state?.batches.find(b=>b.id===answer.batchId);}
+function durationMinutes(){const minutes=Number($('answer-minutes').value);if(!Number.isInteger(minutes)||minutes<1||minutes>180)throw Error('Enter a whole number of minutes from 1 to 180.');return minutes;}
+function storeAnswer(){if(answer)localStorage.setItem(ANSWER,JSON.stringify(answer));else localStorage.removeItem(ANSWER);}
+function clearAnswer(){answer=null;storeAnswer();clearInterval(timerInterval);timerInterval=null;}
+function timerTick(){
+  const remaining=answer?.deadline?Math.max(0,Math.ceil((answer.deadline-Date.now())/1000)):Number($('answer-minutes').value||0)*60;
+  $('answer-clock').textContent=Number.isFinite(remaining)?`${String(Math.floor(remaining/60)).padStart(2,'0')}:${String(remaining%60).padStart(2,'0')}`:'--:--';
+  const expired=!!answer?.deadline&&remaining===0;
+  $('answer-clock').classList.toggle('expired',expired);
+  $('timer-status').textContent=answer?.deadline?(expired?'Time is up.':'Answer in progress.'):'Ready to start.';
+  if(expired){clearInterval(timerInterval);timerInterval=null;}
+}
+function startTimer(){
+  if(!answerBatch())throw Error('Confirm the saved draw before starting the timer.');
+  if(!answer.deadline){answer.deadline=Date.now()+answer.minutes*60000;try{storeAnswer();}catch{answer.deadline=null;throw Error('Draw saved, but the timer could not be stored. Retry Start.');}}
+  clearInterval(timerInterval);timerInterval=setInterval(timerTick,250);timerTick();
+}
+function restoreAnswer(){
+  try{const saved=JSON.parse(localStorage.getItem(ANSWER)||'null');
+    if(saved&&typeof saved.batchId==='string'&&validDate(saved.date)&&Number.isInteger(saved.minutes)&&saved.minutes>=1&&saved.minutes<=180&&(saved.deadline===null||(Number.isFinite(saved.deadline)&&saved.deadline>0))){answer=saved;sessionDate=saved.date;$('answer-minutes').value=saved.minutes;}
+    else localStorage.removeItem(ANSWER);
+  }catch{localStorage.removeItem(ANSWER);}
+}
+async function revealStudent({absent=absentInput(),question=questionNumber(),date=dateInput(),exclude=null}={}){
+  if(absent===null)return;
+  const drawAbsences=exclude===null?absent:[...new Set([...absent,exclude])];
+  const next=drawBatch({...state,absent:drawAbsences},1,question);next.absent=absent.slice();
+  draft={state:next,revision,sessionDate:date};
+  revealing=true;$('announcement').textContent='Drawing one student.';notice('');render();
+  try{if(!window.matchMedia('(prefers-reduced-motion: reduce)').matches)await new Promise(resolve=>setTimeout(resolve,1100));}
+  finally{revealing=false;render();}
+  const batch=draft.state.batches.at(-1);
+  $('announcement').textContent=`Question ${batch.questionStart}: No. ${batch.numbers[0]} ${studentName(batch.numbers[0])}`;
 }
 function questionNumber(){const n=Number($('question').value);if(!Number.isSafeInteger(n)||n<1||n>500)throw Error('Choose a question number from 1 to 500.');return n;}
 function nextQuestion(){return Math.max(1,...(state?.batches||[]).filter(b=>batchDates[b.id]===sessionDate).map(b=>(b.questionStart||1)+b.numbers.length));}
@@ -55,11 +89,11 @@ function controls(){
   const absent=absentInput(),q=state?round(state):0,pool=state&&absent?eligible({...state,absent}):[];
   let n=0;try{n=questionNumber();}catch{}
   const locked=revealing||busy||!!pending||!!initial||!!endpoint&&!connected||!writable;
-  $('draw').disabled=locked||!!draft||!state||!pool.length||!n||absent===null||!validDate($('session-date').value);
+  $('draw').disabled=locked||!!answer||!!draft||!state||!pool.length||!n||absent===null||!validDate($('session-date').value);
   $('draw-label').textContent=revealing?'Drawing…':busy?'Saving…':'Draw one student';
   $('pool-count').replaceChildren(document.createTextNode(`${pool.length} `));const small=document.createElement('small');small.textContent='available';$('pool-count').append(small);
   $('next-round').textContent=q===2?'BOTH ROUNDS DRAWN':'ELIGIBLE STUDENTS';
-  $('session-date').disabled=locked||!!draft;$('question').disabled=locked||!!draft;$('absent').disabled=locked||!!draft;$('backup').disabled=!state;$('bonus-open').disabled=locked||!!draft||!state||absent===null||!!endpoint&&!studentEndpoint;
+  $('session-date').disabled=locked||!!draft||!!answer;$('question').disabled=locked||!!draft||!!answer;$('absent').disabled=locked||!!draft||!!answer;$('backup').disabled=!state;$('bonus-open').disabled=locked||!!draft||!!answer||!state||absent===null||!!endpoint&&!studentEndpoint;
   $('choose-file').disabled=locked||!!endpoint;$('confirm-import').disabled=locked||!!endpoint;
   $('cloud-form').querySelector('button').disabled=busy||!!draft||!!pending||!writable;
   $('cloud-refresh').hidden=!connected;$('cloud-refresh').disabled=busy||revealing;
@@ -67,12 +101,20 @@ function controls(){
   $('cloud-retry').hidden=!pending;$('cloud-retry').disabled=busy||!connected;
   $('cloud-initialize').hidden=!initial;$('cloud-initialize').disabled=busy||!connected;
   $('cloud-source-initialize').hidden=!initial;$('cloud-source-initialize').disabled=busy||!connected;
-  const drawPending=pending&&pending.action!=='attendanceSave';
-  $('draw-review').hidden=revealing||(!draft&&!drawPending);
-  $('draw-save').textContent=drawPending?'Retry saving':busy?'Saving…':'Save draw';
-  $('draw-save').disabled=revealing||busy||!writable||!!endpoint&&!connected||(!draft&&!drawPending);
-  $('draw-cancel').disabled=revealing||busy||!!pending||!draft;
-  $('draw-save-status').textContent=drawPending?'Save not yet confirmed. Retry to confirm this same draw.':draft?'Preview only — Save draw records this draw and attendance.':'';
+  const drawPending=pending&&pending.action==='save'&&pending.state;
+  const answerMode=!!draft||!!drawPending||!!answer;
+  $('draw-review').hidden=revealing||!answerMode;
+  $('draw-controls').hidden=answerMode;
+  $('absence-form').hidden=answerMode;$('attendance-status').hidden=answerMode;
+  $('draw-table').classList.toggle('answer-mode',answerMode&&!revealing);
+  let minutesValid=true;try{durationMinutes();}catch{minutesValid=false;}
+  $('answer-minutes').disabled=busy||revealing||!!pending||!!answer;
+  $('draw-save').textContent=busy?'Saving…':drawPending?'Retry Start':answer?.deadline?'Started':'Start';
+  $('draw-save').disabled=revealing||busy||!writable||!!endpoint&&!connected||!!initial||!minutesValid||!!answer?.deadline||(!draft&&!drawPending&&!answerBatch());
+  $('draw-cancel').disabled=revealing||busy||!!pending||!draft||pool.length<2;
+  $('answer-next').disabled=revealing||busy||!!pending||!answerBatch();
+  $('draw-save-status').textContent=drawPending?'Save not confirmed. Retry Start to keep this same student.':draft?'Start saves this draw and attendance, then begins the timer.':answer?.deadline?'Draw saved. Next student ends this turn and draws the next student.':answer?'Draw saved. Click Start to begin the timer.':'';
+  timerTick();
   const attendancePending=pending?.action==='attendanceSave';
   $('attendance-save').textContent=attendancePending?'Retry attendance save':'Save attendance';
   $('attendance-save').disabled=attendancePending?(busy||!connected):locked||!!draft||!state||!connected||absent===null||!validDate($('session-date').value);
@@ -82,11 +124,11 @@ function controls(){
 
 }
 function render(){
-  const shown=draft?.state||pending?.state||state,batch=shown?.batches.at(-1);
-  $('question').value=(draft||pending?.state)?(batch?.questionStart||1):(questionText??nextQuestion());
+  const shown=draft?.state||pending?.state||state,batch=draft||pending?.state?shown?.batches.at(-1):(answerBatch()||shown?.batches.at(-1));
+  $('question').value=(draft||pending?.state||answer)?(batch?.questionStart||1):(questionText??nextQuestion());
   $('session-date').value=sessionDate;
   $('absent').value=draft?draft.state.absent.join(','):absenceText??(selectedAttendance()?.absent||[]).join(',');
-  $('round-label').textContent='THIS DRAW';
+  $('round-label').textContent=!revealing&&(draft||answer||pending?.action==='save')?'ANSWER TIME':'THIS DRAW';
   $('deck-caption').textContent=revealing?'Drawing…':batch?`${batch.numbers.length} ${batch.numbers.length===1?'student':'students'} selected${draft?' · Preview':pending?' · Save not confirmed':''}`:'';
   previewResults(batch?.numbers,batch?.questionStart||1);controls();
   if(!state)notice('Connecting to Google Sheets…');
@@ -95,29 +137,48 @@ function render(){
 }
 async function exclusive(fn){if(busy)return;busy=true;controls();try{return await fn();}finally{busy=false;controls();}}
 $('draw').onclick=handle(async()=>{
-  if(revealing||busy||pending||draft||$('draw').disabled)return;
-  const absent=absentInput();if(absent===null)return;
-  draft={state:drawBatch({...state,absent},1,questionNumber()),revision,sessionDate:dateInput()};
-  revealing=true;$('announcement').textContent='Drawing one student.';notice('');render();
-  try{if(!window.matchMedia('(prefers-reduced-motion: reduce)').matches)await new Promise(resolve=>setTimeout(resolve,1100));}
-  finally{revealing=false;render();}
-  const batch=draft.state.batches.at(-1);
-  $('announcement').textContent=`Question ${batch.questionStart}: No. ${batch.numbers[0]} ${studentName(batch.numbers[0])}`;
+  if(revealing||busy||pending||draft||answer||$('draw').disabled)return;
+  await revealStudent();
 });
-$('draw-save').onclick=handle(()=>revealing?undefined:exclusive(async()=>{
-  if(pending){try{await flushPending();absenceText=null;questionText=null;notice('Draw saved.');}finally{render();}return;}
-  if(!draft)return;
-  if(draft.revision!==revision){draft=null;render();throw Error('Cloud progress changed. This preview was not saved. Draw again using the latest records.');}
-  const next=draft.state,classDate=draft.sessionDate;draft=null;
-  try{await save(next,'save',classDate);absenceText=null;questionText=null;notice('Draw saved.');}finally{render();}
-}));
+$('draw-save').onclick=handle(()=>{
+  if($('draw-save').disabled)return;
+  return exclusive(async()=>{
+    try{
+      if(answerBatch()&&!pending&&!draft){startTimer();return;}
+      const selected=draft?.state.batches.at(-1)||pending?.state?.batches.at(-1);
+      if(!selected)return;
+      if(!answer){answer={batchId:selected.id,date:draft?.sessionDate||pending.sessionDate||sessionDate,minutes:durationMinutes(),deadline:null};try{storeAnswer();}catch{answer=null;throw Error('The answer session could not be stored. Retry Start.');}try{localStorage.setItem(MINUTES,String(answer.minutes));}catch{}}
+      if(pending)await flushPending();
+      else{
+        if(draft.revision!==revision){draft=null;clearAnswer();throw Error('Cloud progress changed. Draw again using the latest records.');}
+        const preview=draft;draft=null;
+        try{await save(preview.state,'save',preview.sessionDate);}catch(error){if(!pending&&revision===preview.revision&&!answerBatch())draft=preview;throw error;}
+      }
+      absenceText=null;questionText=null;startTimer();notice('');
+    }catch(error){if(!pending&&!draft&&!answerBatch())clearAnswer();throw error;}
+    finally{render();}
+  });
+});
 $('draw-cancel').onclick=handle(()=>{
-  if(revealing||busy||pending||!draft)return;
-  draft=null;notice('Preview cancelled. No draw was saved.');render();
+  if($('draw-cancel').disabled||revealing||busy||pending||!draft)return;
+  return exclusive(async()=>{
+    const batch=draft.state.batches.at(-1),options={absent:draft.state.absent.slice(),question:batch.questionStart||1,date:draft.sessionDate,exclude:batch.numbers[0]};
+    clearAnswer();draft=null;await revealStudent(options);
+  });
 });
+$('answer-next').onclick=handle(()=>{
+  if($('answer-next').disabled||revealing||busy||pending||!answerBatch())return;
+  return exclusive(async()=>{
+    const batch=answerBatch(),question=Math.max(nextQuestion(),(batch.questionStart||1)+batch.numbers.length);
+    clearAnswer();questionText=String(question);if(!endpoint)absenceText=state.absent.join(',');notice('');render();
+    const absent=absentInput();
+    if(absent&&eligible({...state,absent}).length)await revealStudent({absent,question:questionNumber(),date:dateInput()});
+  });
+});
+$('answer-minutes').oninput=()=>{timerTick();controls();};
 $('question').oninput=()=>{questionText=$('question').value;controls();};
 $('absent').oninput=()=>{absenceText=$('absent').value;controls();};
-$('session-date').onchange=handle(()=>{if(draft||pending||busy)return;sessionDate=$('session-date').value;absenceText=null;questionText=null;notice('');render();});
+$('session-date').onchange=handle(()=>{if(draft||pending||busy||answer)return;sessionDate=$('session-date').value;absenceText=null;questionText=null;notice('');render();});
 $('attendance-save').onclick=handle(()=>{
   if($('attendance-save').disabled)return;
   return exclusive(async()=>{
@@ -152,6 +213,9 @@ async function loadCloud(){
       const received=Array.isArray(result.requestIds)?result.requestIds.includes(pending.requestId):pending.action!=='attendanceSave'&&pending.state&&pending.state.batches.every(b=>state.batches.some(saved=>saved.id===b.id))&&JSON.stringify(pending.state.absent)===JSON.stringify(state.absent);
       if(received){localStorage.removeItem(PENDING);pending=null;absenceText=null;questionText=null;render();}
     }
+    if(answer&&!pending&&!answerBatch())clearAnswer();
+    if(answer?.deadline&&answerBatch()){clearInterval(timerInterval);timerInterval=setInterval(timerTick,250);}
+    render();
   }
   else{revision=result.revision;sourceInitial=validateState({version:2,students:result.roster,absent:[],batches:[],bonus:[]});initial=state?mergeRoster(state,result.roster):sourceInitial;$('cloud-status').textContent=`Cloud has no records yet. Start with ${initial.students.length} students and ${initial.batches.length} saved batches from this browser${state?'':' / the source sheet'}.`;}
 }
@@ -177,7 +241,7 @@ $('cloud-form').onsubmit=handle(()=>exclusive(async()=>{
 }));
 $('cloud-initialize').onclick=handle(()=>exclusive(async()=>{if(!initial)return;const next=initial;initial=null;try{await save(next,'initialize');}catch(error){throw error;}installBonus();notice('');render();}));
 $('cloud-source-initialize').onclick=handle(()=>exclusive(async()=>{if(!sourceInitial)return;const next=sourceInitial;initial=null;sourceInitial=null;await save(next,'initialize');installBonus();notice('');render();}));
-$('cloud-retry').onclick=handle(()=>exclusive(async()=>{const drawPending=pending?.action==='save';await flushPending();if(drawPending)questionText=null;absenceText=null;notice('');render();}));
+$('cloud-retry').onclick=handle(()=>exclusive(async()=>{const drawPending=pending?.action==='save';await flushPending();if(drawPending){questionText=null;if(answerBatch()&&!answer.deadline)startTimer();}absenceText=null;notice('');render();}));
 $('cloud-refresh').onclick=handle(()=>exclusive(async()=>{await loadCloud();await bonus?.refresh?.();notice(pending?'A save still needs confirmation. Use Retry saving.':'');}));
 $('cloud-names').onclick=handle(()=>exclusive(async()=>{const result=await call('names');await save(mergeRoster(state,result.roster));notice('Names updated.');render();}));
 async function activate(){
@@ -195,15 +259,22 @@ async function activate(){
         sessionDate=pending.date;absenceText=pending.absent.join(',');
       }else{pending.state=validateState(pending.state);if(validDate(pending.sessionDate)){sessionDate=pending.sessionDate;absenceText=pending.state.absent.join(',');}}
     }
+    const lastMinutes=Number(localStorage.getItem(MINUTES));if(Number.isInteger(lastMinutes)&&lastMinutes>=1&&lastMinutes<=180)$('answer-minutes').value=lastMinutes;
+    restoreAnswer();
     $('cloud-url').value=endpoint;$('student-url').value=studentEndpoint;updateLoginLink();
     if(endpoint){
       $('cloud-status').textContent='Sign in with the authorized Google account to resume.';
       if(studentEndpoint){cloud=createCloudClient(endpoint);const account=await cloud.call('auth');connected=true;$('cloud-account').textContent=`Google account: ${account.email}`;await loadCloud();installBonus();await bonus?.refresh?.();}
       else notice('Set the separate administrator and student URLs in Draw settings.');
     }else installBonus();
+    if(answer&&!pending&&!answerBatch())clearAnswer();
+    if(answer?.deadline&&answerBatch())startTimer();
     if(state&&!initial&&(!endpoint||connected))notice('');render();
   }catch(error){if(endpoint)connected=false;notice(`Could not connect: ${error.message}`,true);controls();}
 }
 render();
 if(navigator.locks)navigator.locks.request(OLD_KEY,{ifAvailable:true},async lock=>{if(!lock){notice('Close the other draw page, then reload this one.',true);return;}await activate();await new Promise(()=>{});}).catch(error=>notice(error.message,true));else notice('Use a current browser to save your draw.',true);
 window.addEventListener('beforeunload',event=>{if(draft||pending||(!endpoint&&(bonus?.isOpen()||bonus?.hasUnsavedResult()||bonus?.getEntrants().length))){event.preventDefault();event.returnValue='';}});
+
+window.addEventListener('pageshow',timerTick);
+document.addEventListener('visibilitychange',timerTick);

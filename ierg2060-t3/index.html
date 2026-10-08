@@ -1,16 +1,19 @@
 <!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; frame-src https://script.google.com https://*.googleusercontent.com https://accounts.google.com; connect-src 'self' https://*.peerjs.com wss://*.peerjs.com; base-uri 'none'; form-action 'none'; object-src 'none'"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex,nofollow,noarchive"><meta name="referrer" content="no-referrer"><meta name="theme-color" content="#ffffff">
-<title>IERG2060 · Tutorial 3</title><link rel="stylesheet" href="style.css?v=11"><script defer src="vendor/peerjs.min.js"></script><script defer src="vendor/qrcode.js"></script><script type="module" src="app.js?v=14"></script>
+<title>IERG2060 · Tutorial 3</title><link rel="stylesheet" href="style.css?v=12"><script defer src="vendor/peerjs.min.js"></script><script defer src="vendor/qrcode.js"></script><script type="module" src="app.js?v=15"></script>
 </head><body>
 <div class="shell">
 <header><span class="site-title">IERG2060 · Tutorial 3</span><div class="header-actions"><a id="records-link" class="pill" target="_blank" rel="noopener noreferrer" hidden>Records ↗</a><button id="bonus-open" class="pill">Bonus round</button><button id="settings-open" class="icon-button" aria-label="Draw settings">⚙</button></div></header>
 <main>
-<section class="draw-table" aria-label="Student draw">
+<section id="draw-table" class="draw-table" aria-label="Student draw">
 <div class="table-heading"><span id="round-label" class="round-label">THIS DRAW</span><span id="deck-caption"></span></div>
 <div id="results" class="results" aria-label="Draw results"></div><p id="announcement" class="sr-only" role="status" aria-live="polite"></p><p id="notice" class="notice" role="status" hidden></p>
-<div id="draw-review" class="draw-review" hidden><p id="draw-save-status" role="status"></p><div><button id="draw-save" class="pill accent">Save draw</button><button id="draw-cancel" class="pill">Cancel</button></div></div>
-<div class="draw-controls">
+<div id="draw-review" class="draw-review" hidden>
+<div class="timer-setup"><label for="answer-minutes">Time limit (minutes)</label><input id="answer-minutes" type="number" min="1" max="180" step="1" value="5" inputmode="numeric"></div>
+<output id="answer-clock" class="answer-clock" role="timer" aria-live="off">05:00</output><p id="timer-status" role="status">Ready to start.</p>
+<div class="answer-actions"><button id="draw-save" class="pill accent">Start</button><button id="draw-cancel" class="pill">Redraw</button><button id="answer-next" class="pill" disabled>Next student</button></div><p id="draw-save-status" role="status"></p></div>
+<div id="draw-controls" class="draw-controls">
 <label class="question-control" for="question"><span class="control-label">QUESTION NUMBER</span><input id="question" type="number" min="1" max="500" value="1" aria-label="Question number"></label>
 <button id="draw" class="draw-button" disabled><span id="draw-label">Draw one student</span></button>
 <div class="pool-info"><span class="control-label" id="next-round">ELIGIBLE STUDENTS</span><strong id="pool-count">— <small>available</small></strong></div>
