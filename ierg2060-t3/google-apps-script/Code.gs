@@ -336,7 +336,12 @@ function cleanState_(input, roster) {
       if (drawn.has(key) || !byNo.get(no).q[b.q]) throw Error('A student was repeated or the history disagrees with progress.');
       drawn.add(key);
     });
-    return {id:id,q:b.q,numbers:numbers,at:time_(b.at)};
+    const batch = {id:id,q:b.q,numbers:numbers,at:time_(b.at)};
+    if (Object.prototype.hasOwnProperty.call(b,'questionStart')) {
+      if (!Number.isSafeInteger(b.questionStart) || b.questionStart < 1 || b.questionStart > 500 || b.questionStart + numbers.length - 1 > 500) throw Error('Question numbers must be integers from 1 to 500.');
+      batch.questionStart=b.questionStart;
+    }
+    return batch;
   });
   const replay = new Map(students.map(p => [p.no,p.q.slice()]));
   batches.forEach(b => b.numbers.forEach(no => {replay.get(no)[b.q]=false;}));
@@ -378,8 +383,8 @@ function digest_(value) {
 function log_(book,state) {
   if (!state) return;
   const names = new Map(state.students.map(p => [p.no,p.name]));
-  const rows = [['Kind','Round / batch','Participation round','Question in batch','Roster No.','Name','Saved at']];
-  state.batches.forEach(b => b.numbers.forEach((no,i) => rows.push(['Participation',b.id,b.q+1,i+1,no,names.get(no),b.at])));
+  const rows = [['Kind','Round / batch','Participation round','Question','Roster No.','Name','Saved at']];
+  state.batches.forEach(b => b.numbers.forEach((no,i) => rows.push(['Participation',b.id,b.q+1,(b.questionStart || 1)+i,no,names.get(no),b.at])));
   state.bonus.forEach(b => rows.push(['Bonus',b.round,'','',b.no,names.get(b.no),b.drawnAt]));
   const sheet = book.getSheetByName('Draw log');
   sheet.clearContents();
@@ -503,7 +508,7 @@ function reports_(book, document) {
   if (document.state) {
     document.state.batches.forEach((batch,index) => batch.numbers.forEach((no,question) => {
       drawn.add(batch.q+':'+no);
-      history.push([no,byNo.get(no).name,document.batchDates[batch.id] || '',index+1,question+1,batch.q+1,'课堂讲题',reportTime_(batch.at)]);
+      history.push([no,byNo.get(no).name,document.batchDates[batch.id] || '',index+1,(batch.questionStart || 1)+question,batch.q+1,'课堂讲题',reportTime_(batch.at)]);
     }));
     document.state.bonus.forEach((bonus,index) => history.push([bonus.no,byNo.get(bonus.no).name,'',index+1,'','','Bonus',reportTime_(bonus.drawnAt)]));
   }
@@ -512,7 +517,7 @@ function reports_(book, document) {
   }));
   const questionSheet = reportSheet_(book, '讲题记录', 'Tutorial 3 · 讲题记录',
     '课堂日期仅来自网站明确保存的日期。历史参与没有日期、批次或题目分配；保存时间为香港时间。请在网站维护，表格改动会被覆盖。',
-    ['No.','Name','课堂日期','批次序号','批次内题号','参与轮次','类型','保存时间（香港）'], history);
+    ['No.','Name','课堂日期','批次序号','题号','参与轮次','类型','保存时间（香港）'], history);
   questionSheet.setColumnWidth(7,190);
   questionSheet.setColumnWidth(8,185);
   const rosterRows = students.map(p => [p.no,p.name,p.q[0] ? '已参与' : '待参与',p.q[1] ? '已参与' : '待参与',p.q.filter(Boolean).length]);

@@ -46,7 +46,7 @@ Every action except `bonusJoin` and `bonusInfo` checks the server-provided activ
 | `bonusJoin` (public) | `room,no` | `{status:'joined',no}` |
 | `bonusInfo` (public) | `room` | `{id,open}` |
 
-`roster` contains `{no,name,q:[boolean,boolean]}`. Version 2 state contains `{version,students,absent,batches,bonus}`; student names are resolved from the private snapshot by the server. An admin room contains `{id,open,entrants:[number],winner:null|{no,name},absent:[number],drawnAt:null|ISO}`. The student endpoints never return the roster or registration list. Students self-report a roster number; this does not authenticate their identity. Duplicate numbers count once, and the instructor can remove an erroneous entry before drawing.
+`roster` contains `{no,name,q:[boolean,boolean]}`. Each new single-student batch may carry `questionStart` (1–500, including its final question); legacy batches omit it and retain their original numbering. Saved question assignments cannot be rewritten. Version 2 state contains `{version,students,absent,batches,bonus}`; student names are resolved from the private snapshot by the server. An admin room contains `{id,open,entrants:[number],winner:null|{no,name},absent:[number],drawnAt:null|ISO}`. The student endpoints never return the roster or registration list. Students self-report a roster number; this does not authenticate their identity. Duplicate numbers count once, and the instructor can remove an erroneous entry before drawing.
 
 ## Persistence and recovery
 

@@ -1,4 +1,4 @@
-import {fromSheet, validateState, migrateState, mergeRoster, round, eligible, parseAbsent, drawBatch} from './core.js?v=6';
+import {fromSheet, validateState, migrateState, mergeRoster, round, eligible, parseAbsent, drawBatch} from './core.js?v=7';
 import {setupBonus} from './bonus.js?v=6';
 import {setupCloudBonus} from './cloud-bonus.js?v=9';
 import {createCloudClient, cloudEndpoint} from './cloud.js?v=7';
@@ -6,7 +6,7 @@ import {cloudDefaults} from './cloud-config.js?v=7';
 
 const KEY='ierg2060-t3-v2', OLD_KEY='ierg2060-t3-v1', CLOUD='ierg2060-t3-cloud', LEGACY_SECRET='ierg2060-t3-cloud-key', PENDING='ierg2060-t3-pending';
 const $=id=>document.getElementById(id);
-let state=null,incoming=null,bonus=null,writable=false,busy=false,cloud=null,endpoint='',studentEndpoint='',revision=0,connected=false,pending=null,initial=null,sourceInitial=null,draft=null,absenceText=null,attendance=[],batchDates={},sessionDate=today(),recordsWarning="";
+let state=null,incoming=null,bonus=null,writable=false,busy=false,cloud=null,endpoint='',studentEndpoint='',revision=0,connected=false,pending=null,initial=null,sourceInitial=null,draft=null,absenceText=null,attendance=[],batchDates={},sessionDate=today(),recordsWarning="",revealing=false,questionText=null;
 function today(){const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());return ['year','month','day'].map(key=>parts.find(p=>p.type===key).value).join('-');}
 function validDate(value){return typeof value==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(value+'T00:00:00Z'))&&new Date(value+'T00:00:00Z').toISOString().slice(0,10)===value;}
 function selectedAttendance(){return attendance.find(row=>row.date===sessionDate);}
@@ -42,35 +42,36 @@ async function save(next,action='save',classDate){
   localStorage.setItem(PENDING,JSON.stringify(pending));
   try{await flushPending();}catch(error){$('cloud-status').textContent='Save not confirmed. Retry saving before continuing.';throw error;}
 }
-function count(){const n=Number($('count').value);if(!Number.isInteger(n)||n<1||n>(state?.students.length||35))throw Error('Choose a whole number from 1 to the class size.');return n;}
-function previewResults(numbers=[]){
-  const results=$('results');results.replaceChildren();if(!numbers.length)return;
-  const list=document.createElement('ol');list.className='draw-results';
-  numbers.forEach((no,i)=>{const item=document.createElement('li'),q=document.createElement('span'),n=document.createElement('strong'),name=document.createElement('span');q.className='result-q';q.textContent=`QUESTION ${i+1}`;n.className='result-no';n.textContent=String(no).padStart(2,'0');name.className='result-name';name.textContent=studentName(no);item.append(q,n);if(name.textContent)item.append(name);list.append(item);});results.append(list);
+function questionNumber(){const n=Number($('question').value);if(!Number.isSafeInteger(n)||n<1||n>500)throw Error('Choose a question number from 1 to 500.');return n;}
+function nextQuestion(){return Math.max(1,...(state?.batches||[]).filter(b=>batchDates[b.id]===sessionDate).map(b=>(b.questionStart||1)+b.numbers.length));}
+function previewResults(numbers=[],questionStart=1){
+  const results=$('results');results.replaceChildren();results.setAttribute('aria-busy',String(revealing));
+  if(revealing||!numbers.length){const card=document.createElement('div');card.className='card-back'+(revealing?' shuffling':'');card.setAttribute('aria-hidden','true');const emblem=document.createElement('span');emblem.textContent='?';card.append(emblem);results.append(card);return;}
+  const list=document.createElement('ol');list.className='draw-results'+(numbers.length===1?' single-result':'');
+  numbers.forEach((no,i)=>{const item=document.createElement('li'),q=document.createElement('span'),n=document.createElement('strong'),name=document.createElement('span');q.className='result-q';q.textContent=`QUESTION ${questionStart+i}`;n.className='result-no';n.textContent=String(no).padStart(2,'0');name.className='result-name';name.textContent=studentName(no);item.append(q,n);if(name.textContent)item.append(name);list.append(item);});results.append(list);
 }
 function absentInput(){try{const absent=parseAbsent($('absent').value,state?.students||[]);$('absence-form').classList.remove('invalid');$('absent').removeAttribute('aria-invalid');$('absence-help').textContent='No. separated by commas · no spaces · leave empty if none';return absent;}catch(error){$('absence-form').classList.add('invalid');$('absent').setAttribute('aria-invalid','true');$('absence-help').textContent=error.message;return null;}}
 function controls(){
   const absent=absentInput(),q=state?round(state):0,pool=state&&absent?eligible({...state,absent}):[];
-  let n=0;try{n=count();}catch{}
-  const locked=busy||!!pending||!!initial||!!endpoint&&!connected||!writable;
+  let n=0;try{n=questionNumber();}catch{}
+  const locked=revealing||busy||!!pending||!!initial||!!endpoint&&!connected||!writable;
   $('draw').disabled=locked||!!draft||!state||!pool.length||!n||absent===null||!validDate($('session-date').value);
-  $('draw-label').textContent=busy?'Saving…':`Draw ${Math.min(n||6,pool.length||n||6)} students`;
+  $('draw-label').textContent=revealing?'Drawing…':busy?'Saving…':'Draw one student';
   $('pool-count').replaceChildren(document.createTextNode(`${pool.length} `));const small=document.createElement('small');small.textContent='available';$('pool-count').append(small);
   $('next-round').textContent=q===2?'BOTH ROUNDS DRAWN':'ELIGIBLE STUDENTS';
-  document.querySelectorAll('[data-count]').forEach(button=>{const active=Number(button.dataset.count)===n;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));button.disabled=locked||!!draft;});
-  $('session-date').disabled=locked||!!draft;$('count').disabled=locked||!!draft;$('absent').disabled=locked||!!draft;$('backup').disabled=!state;$('bonus-open').disabled=locked||!!draft||!state||absent===null||!!endpoint&&!studentEndpoint;
+  $('session-date').disabled=locked||!!draft;$('question').disabled=locked||!!draft;$('absent').disabled=locked||!!draft;$('backup').disabled=!state;$('bonus-open').disabled=locked||!!draft||!state||absent===null||!!endpoint&&!studentEndpoint;
   $('choose-file').disabled=locked||!!endpoint;$('confirm-import').disabled=locked||!!endpoint;
   $('cloud-form').querySelector('button').disabled=busy||!!draft||!!pending||!writable;
-  $('cloud-refresh').hidden=!connected;$('cloud-refresh').disabled=busy;
+  $('cloud-refresh').hidden=!connected;$('cloud-refresh').disabled=busy||revealing;
   $('cloud-names').hidden=!connected;$('cloud-names').disabled=locked||!!draft;
   $('cloud-retry').hidden=!pending;$('cloud-retry').disabled=busy||!connected;
   $('cloud-initialize').hidden=!initial;$('cloud-initialize').disabled=busy||!connected;
   $('cloud-source-initialize').hidden=!initial;$('cloud-source-initialize').disabled=busy||!connected;
   const drawPending=pending&&pending.action!=='attendanceSave';
-  $('draw-review').hidden=!draft&&!drawPending;
+  $('draw-review').hidden=revealing||(!draft&&!drawPending);
   $('draw-save').textContent=drawPending?'Retry saving':busy?'Saving…':'Save draw';
-  $('draw-save').disabled=busy||!writable||!!endpoint&&!connected||(!draft&&!drawPending);
-  $('draw-cancel').disabled=busy||!!pending||!draft;
+  $('draw-save').disabled=revealing||busy||!writable||!!endpoint&&!connected||(!draft&&!drawPending);
+  $('draw-cancel').disabled=revealing||busy||!!pending||!draft;
   $('draw-save-status').textContent=drawPending?'Save not yet confirmed. Retry to confirm this same draw.':draft?'Preview only — Save draw records this draw and attendance.':'';
   const attendancePending=pending?.action==='attendanceSave';
   $('attendance-save').textContent=attendancePending?'Retry attendance save':'Save attendance';
@@ -82,39 +83,41 @@ function controls(){
 }
 function render(){
   const shown=draft?.state||pending?.state||state,batch=shown?.batches.at(-1);
-  $('count').max=state?.students.length||35;
+  $('question').value=(draft||pending?.state)?(batch?.questionStart||1):(questionText??nextQuestion());
   $('session-date').value=sessionDate;
   $('absent').value=draft?draft.state.absent.join(','):absenceText??(selectedAttendance()?.absent||[]).join(',');
   $('round-label').textContent='THIS DRAW';
-  $('deck-caption').textContent=batch?`${batch.numbers.length} students selected${draft?' · Preview':pending?' · Save not confirmed':''}`:'';
-  previewResults(batch?.numbers);controls();
+  $('deck-caption').textContent=revealing?'Drawing…':batch?`${batch.numbers.length} ${batch.numbers.length===1?'student':'students'} selected${draft?' · Preview':pending?' · Save not confirmed':''}`:'';
+  previewResults(batch?.numbers,batch?.questionStart||1);controls();
   if(!state)notice('Connecting to Google Sheets…');
   else if(!draft&&!pending&&round(state)===2)notice('Both participation rounds are complete.');
   else if(!draft&&!pending&&!eligible({...state,absent:absentInput()||[]}).length)notice('The remaining students in this round are absent. This round stays open.');
 }
 async function exclusive(fn){if(busy)return;busy=true;controls();try{return await fn();}finally{busy=false;controls();}}
-$('draw').onclick=handle(()=>{
-  if(busy||pending||draft||$('draw').disabled)return;
+$('draw').onclick=handle(async()=>{
+  if(revealing||busy||pending||draft||$('draw').disabled)return;
   const absent=absentInput();if(absent===null)return;
-  draft={state:drawBatch({...state,absent},count()),revision,sessionDate:dateInput()};
-  notice('');render();
+  draft={state:drawBatch({...state,absent},1,questionNumber()),revision,sessionDate:dateInput()};
+  revealing=true;$('announcement').textContent='Drawing one student.';notice('');render();
+  try{if(!window.matchMedia('(prefers-reduced-motion: reduce)').matches)await new Promise(resolve=>setTimeout(resolve,1100));}
+  finally{revealing=false;render();}
   const batch=draft.state.batches.at(-1);
-  $('announcement').textContent=batch.numbers.map((no,i)=>`Question ${i+1}: No. ${no} ${studentName(no)}`).join('. ');
+  $('announcement').textContent=`Question ${batch.questionStart}: No. ${batch.numbers[0]} ${studentName(batch.numbers[0])}`;
 });
-$('draw-save').onclick=handle(()=>exclusive(async()=>{
-  if(pending){try{await flushPending();absenceText=null;notice('Draw saved.');}finally{render();}return;}
+$('draw-save').onclick=handle(()=>revealing?undefined:exclusive(async()=>{
+  if(pending){try{await flushPending();absenceText=null;questionText=null;notice('Draw saved.');}finally{render();}return;}
   if(!draft)return;
   if(draft.revision!==revision){draft=null;render();throw Error('Cloud progress changed. This preview was not saved. Draw again using the latest records.');}
   const next=draft.state,classDate=draft.sessionDate;draft=null;
-  try{await save(next,'save',classDate);absenceText=null;notice('Draw saved.');}finally{render();}
+  try{await save(next,'save',classDate);absenceText=null;questionText=null;notice('Draw saved.');}finally{render();}
 }));
 $('draw-cancel').onclick=handle(()=>{
-  if(busy||pending||!draft)return;
+  if(revealing||busy||pending||!draft)return;
   draft=null;notice('Preview cancelled. No draw was saved.');render();
 });
-document.querySelectorAll('[data-count]').forEach(button=>button.onclick=()=>{$('count').value=button.dataset.count;controls();});$('count').oninput=controls;
+$('question').oninput=()=>{questionText=$('question').value;controls();};
 $('absent').oninput=()=>{absenceText=$('absent').value;controls();};
-$('session-date').onchange=handle(()=>{if(draft||pending||busy)return;sessionDate=$('session-date').value;absenceText=null;notice('');render();});
+$('session-date').onchange=handle(()=>{if(draft||pending||busy)return;sessionDate=$('session-date').value;absenceText=null;questionText=null;notice('');render();});
 $('attendance-save').onclick=handle(()=>{
   if($('attendance-save').disabled)return;
   return exclusive(async()=>{
@@ -147,7 +150,7 @@ async function loadCloud(){
     initial=null;sourceInitial=null;cloudState(result);
     if(pending){
       const received=Array.isArray(result.requestIds)?result.requestIds.includes(pending.requestId):pending.action!=='attendanceSave'&&pending.state&&pending.state.batches.every(b=>state.batches.some(saved=>saved.id===b.id))&&JSON.stringify(pending.state.absent)===JSON.stringify(state.absent);
-      if(received){localStorage.removeItem(PENDING);pending=null;absenceText=null;render();}
+      if(received){localStorage.removeItem(PENDING);pending=null;absenceText=null;questionText=null;render();}
     }
   }
   else{revision=result.revision;sourceInitial=validateState({version:2,students:result.roster,absent:[],batches:[],bonus:[]});initial=state?mergeRoster(state,result.roster):sourceInitial;$('cloud-status').textContent=`Cloud has no records yet. Start with ${initial.students.length} students and ${initial.batches.length} saved batches from this browser${state?'':' / the source sheet'}.`;}
@@ -174,7 +177,7 @@ $('cloud-form').onsubmit=handle(()=>exclusive(async()=>{
 }));
 $('cloud-initialize').onclick=handle(()=>exclusive(async()=>{if(!initial)return;const next=initial;initial=null;try{await save(next,'initialize');}catch(error){throw error;}installBonus();notice('');render();}));
 $('cloud-source-initialize').onclick=handle(()=>exclusive(async()=>{if(!sourceInitial)return;const next=sourceInitial;initial=null;sourceInitial=null;await save(next,'initialize');installBonus();notice('');render();}));
-$('cloud-retry').onclick=handle(()=>exclusive(async()=>{await flushPending();notice('');render();}));
+$('cloud-retry').onclick=handle(()=>exclusive(async()=>{const drawPending=pending?.action==='save';await flushPending();if(drawPending)questionText=null;absenceText=null;notice('');render();}));
 $('cloud-refresh').onclick=handle(()=>exclusive(async()=>{await loadCloud();await bonus?.refresh?.();notice(pending?'A save still needs confirmation. Use Retry saving.':'');}));
 $('cloud-names').onclick=handle(()=>exclusive(async()=>{const result=await call('names');await save(mergeRoster(state,result.roster));notice('Names updated.');render();}));
 async function activate(){

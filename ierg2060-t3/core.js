@@ -73,6 +73,11 @@ function studentName(value) {
   return value.trim().replace(/\s+/g, ' ');
 }
 
+function checkedQuestionStart(value, count) {
+  if (!Number.isSafeInteger(value) || value < 1 || value > 500 || value + count - 1 > 500) throw Error('题号必须是 1 到 500 的整数，且末题题号不能超过 500。');
+  return value;
+}
+
 export function validateState(s) {
   if (!s || s.version !== 2 || !Array.isArray(s.students) || !s.students.length || s.students.length > 500) throw Error('备份格式无效。');
   const students = s.students.map(p => {
@@ -96,7 +101,9 @@ export function validateState(s) {
       if (drawn.has(key) || !byNo.get(no).q[entry.q]) throw Error('批次与抽签进度不一致。');
       drawn.add(key);
     }
-    return { id, q: entry.q, numbers, at: timestamp(entry.at) };
+    const batch = { id, q: entry.q, numbers, at: timestamp(entry.at) };
+    if (Object.prototype.hasOwnProperty.call(entry, 'questionStart')) batch.questionStart = checkedQuestionStart(entry.questionStart, numbers.length);
+    return batch;
   });
   // Reconstruct imported progress, then verify every retained batch was in its round.
   const replay = { students: students.map(p => ({ no: p.no, q: [...p.q] })) };
@@ -172,19 +179,22 @@ export function pick(items) {
   return items[value[0] % items.length];
 }
 
-export function drawBatch(s, n) {
+export function drawBatch(s, n, questionStart) {
   const state = validateState(s);
   if (!Number.isSafeInteger(n) || n < 1 || n > 500) throw Error('每批人数必须是 1 到 500 的整数。');
   const q = round(state), pool = eligible(state).map(p => p.no), numbers = [];
   if (!pool.length) throw Error(q === 2 ? '全班已完成两轮。' : '本轮剩余同学均缺席，等待补齐后继续。');
   const count = Math.min(n, pool.length);
+  if (questionStart !== undefined) checkedQuestionStart(questionStart, count);
   for (let i = 0; i < count; i++) {
     const no = pick(pool);
     numbers.push(no);
     pool.splice(pool.indexOf(no), 1);
   }
   for (const student of state.students) if (numbers.includes(student.no)) student.q[q] = true;
-  state.batches.push({ id: crypto.randomUUID(), q, numbers, at: new Date().toISOString() });
+  const batch = { id: crypto.randomUUID(), q, numbers, at: new Date().toISOString() };
+  if (questionStart !== undefined) batch.questionStart = questionStart;
+  state.batches.push(batch);
   state.batches = state.batches.slice(-500);
   return validateState(state);
 }
