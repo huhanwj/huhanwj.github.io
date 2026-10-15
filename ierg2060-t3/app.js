@@ -5,7 +5,7 @@ import {createCloudClient, cloudEndpoint} from './cloud.js?v=10';
 import {readSession, beginSignIn, cancelSignIn, clearSession} from './auth.js?v=2';
 import {cloudDefaults, testMode, browserStateKey} from './cloud-config.js?v=8';
 
-const [KEY,OLD_KEY,CLOUD,LEGACY_SECRET,PENDING,ANSWER,MINUTES,LOCAL_ATTENDANCE,FINISHED]=['ierg2060-t3-v2','ierg2060-t3-v1','ierg2060-t3-cloud','ierg2060-t3-cloud-key','ierg2060-t3-pending','ierg2060-t3-answer','ierg2060-t3-minutes','ierg2060-t3-attendance','ierg2060-t3-finished-sessions'].map(browserStateKey);
+const [KEY,OLD_KEY,CLOUD,LEGACY_SECRET,PENDING,ANSWER,MINUTES,LOCAL_ATTENDANCE,FINISHED,CLASS_DATE]=['ierg2060-t3-v2','ierg2060-t3-v1','ierg2060-t3-cloud','ierg2060-t3-cloud-key','ierg2060-t3-pending','ierg2060-t3-answer','ierg2060-t3-minutes','ierg2060-t3-attendance','ierg2060-t3-finished-sessions','ierg2060-t3-class-date'].map(browserStateKey);
 let finishedDates=[];
 function sessionFinished(){return finishedDates.includes(sessionDate);}
 const $=id=>document.getElementById(id);
@@ -20,7 +20,7 @@ function selectedAttendance(){return attendance.find(row=>row.date===sessionDate
 function attendanceReady(date,absent){const record=attendance.find(row=>row.date===date);return validDate(date)&&Array.isArray(absent)&&!!record&&record.absent.length===absent.length&&record.absent.every(no=>absent.includes(no));}
 function requireAttendance(date,absent){if(!attendanceReady(date,absent))throw Error('Save attendance for this class date before drawing.');}
 function dateInput(){const value=$('session-date').value;if(!validDate(value))throw Error('Choose a valid class date.');return value;}
-function notice(text,error=false){$('notice').textContent=text;$('notice').classList.toggle('error',error);$('notice').hidden=!text;if($('settings-dialog').open)$('settings-status').textContent=text;if($('finish-dialog').open)$('finish-status').textContent=text;}
+function notice(text,error=false){$('notice').textContent=text;$('notice').classList.toggle('error',error);$('notice').hidden=!text;if($('settings-dialog').open)$('settings-status').textContent=text;if($('finish-dialog').open)$('finish-status').textContent=text;if($('new-class-dialog').open)$('new-class-status').textContent=text;}
 function handle(fn){return async event=>{event?.preventDefault();try{await fn(event);}catch(error){notice(error.message,true);}finally{controls();}};}
 function cache(next){const clean=validateState(next);localStorage.setItem(KEY,JSON.stringify(clean));state=clean;}
 function studentName(no){return state?.students.find(p=>p.no===no)?.name||'';}
@@ -126,8 +126,10 @@ function controls(){
   $('answer-bonus').disabled=$('bonus-open').disabled||!answerBatch();
   $('session-finish').disabled=locked||!state||sessionFinished();
   $('session-finished').hidden=!sessionFinished();
-  $('session-finished-text').textContent=`${sessionDate} · Session finished. Saved attendance and draws are kept.`;
+  $('session-finished-text').textContent=`Tutorial group 3 · ${sessionDate} finished. Attendance and participation progress are saved.`;
   $('session-resume').disabled=locked;
+  $('session-new').disabled=locked||!state;
+  $('new-class-confirm').disabled=locked||!state;
   $('finish-confirm').disabled=busy||!!pending;
   $('draw-table').hidden=sessionFinished();
   $('choose-file').disabled=locked||!!endpoint;$('confirm-import').disabled=locked||!!endpoint;
@@ -155,7 +157,7 @@ function controls(){
   $('draw-save').disabled=answer?.phase==='bonus'||revealing||busy||!writable||!!endpoint&&!connected||!!initial||!minutesValid||!!answer?.deadline||(!draft&&!drawPending&&!answerBatch());
   $('draw-cancel').disabled=revealing||busy||!!pending||!draft||pool.length<2;
   $('answer-next').disabled=locked||sessionFinished()||!answerBatch();
-  $('draw-save-status').textContent=answer?.phase==='bonus'?'The original draw is saved. Use Bonus round, Next student, or Finish session.':drawPending?'Save not confirmed. Retry Start to keep this same student.':draft?'Start saves this draw, then begins the timer.':answer?.deadline?'Draw saved. Next student ends this turn and draws the next student.':answer?'Draw saved. Click Start to begin the timer.':'';
+  $('draw-save-status').textContent=answer?.phase==='bonus'?'The original draw is saved. Use Bonus round, Next student, or Finish this class.':drawPending?'Save not confirmed. Retry Start to keep this same student.':draft?'Start saves this draw, then begins the timer.':answer?.deadline?'Draw saved. Next student ends this turn and draws the next student.':answer?'Draw saved. Click Start to begin the timer.':'';
   timerTick();
   const attendancePending=pending?.action==='attendanceSave';
   $('attendance-save').textContent=attendancePending?'Retry attendance save':'Save attendance';
@@ -166,7 +168,7 @@ function controls(){
 
 }
 function render(){
-  const shown=draft?.state||pending?.state||state,batch=draft||pending?.state?shown?.batches.at(-1):(answerBatch()||shown?.batches.at(-1));
+  const shown=draft?.state||pending?.state||state,batch=draft||pending?.state?shown?.batches.at(-1):(answerBatch()||shown?.batches.filter(b=>batchDates[b.id]===sessionDate).at(-1));
   $('question').value=(draft||pending?.state||answer)?(batch?.questionStart||1):(questionText??nextQuestion());
   $('session-date').value=sessionDate;
   $('absent').value=draft?draft.state.absent.join(','):absenceText??(selectedAttendance()?.absent||[]).join(',');
@@ -221,7 +223,7 @@ $('answer-next').onclick=handle(()=>{
 $('answer-minutes').oninput=()=>{timerTick();controls();};
 $('question').oninput=()=>{questionText=$('question').value;controls();};
 $('absent').oninput=()=>{absenceText=$('absent').value;controls();};
-$('session-date').onchange=handle(()=>{if(draft||pending||busy||answer)return;sessionDate=$('session-date').value;absenceText=null;questionText=null;notice('');render();});
+$('session-date').onchange=handle(()=>{if(draft||pending||busy||answer)return;const date=dateInput();localStorage.setItem(CLASS_DATE,date);sessionDate=date;absenceText=null;questionText=null;notice('');render();});
 $('attendance-save').onclick=handle(()=>{
   if($('attendance-save').disabled)return;
   return exclusive(async()=>{
@@ -267,19 +269,37 @@ $('session-finish').onclick=()=>{
   $('finish-status').textContent='';$('finish-dialog').showModal();
 };
 $('finish-confirm').onclick=handle(()=>exclusive(async()=>{
-  if(pending)throw Error('Confirm the pending save before finishing this session.');
+  if(pending)throw Error('Confirm the pending save before finishing this class.');
   if(bonus?.hasUnsavedResult())throw Error('Confirm the pending Bonus change before finishing. Open Bonus round and retry it.');
   await bonus?.refresh?.();
   if(bonus?.hasUnsavedResult())throw Error('Confirm the pending Bonus change before finishing.');
   if(await bonus?.close?.()===false)throw Error('Bonus registration closure was not confirmed. Open Bonus round and retry before finishing.');
   const next=[...new Set([...finishedDates,sessionDate])];
-  localStorage.setItem(FINISHED,JSON.stringify(next));
+  localStorage.setItem(CLASS_DATE,sessionDate);localStorage.setItem(FINISHED,JSON.stringify(next));
   clearAnswer();draft=null;finishedDates=next;questionText=null;absenceText=null;
   $('finish-dialog').close();$('bonus-dialog').close();notice('');render();
 }));
 $('session-resume').onclick=handle(()=>{
   if($('session-resume').disabled)return;
   const next=finishedDates.filter(date=>date!==sessionDate);localStorage.setItem(FINISHED,JSON.stringify(next));finishedDates=next;notice('');render();
+});
+$('session-new').onclick=handle(()=>{
+  if($('session-new').disabled)return;
+  const date=today();
+  $('new-class-date').value=date!==sessionDate&&!finishedDates.includes(date)?date:'';
+  $('new-class-status').textContent='';$('new-class-dialog').showModal();$('new-class-date').focus();
+});
+$('new-class-form').onsubmit=handle(()=>{
+  if($('new-class-confirm').disabled)return;
+  if(!sessionFinished()||draft||answer||pending||busy||revealing||bonus?.hasUnsavedResult()||bonus?.isOpen())throw Error('Finish the current class and confirm all saves first.');
+  const date=$('new-class-date').value;
+  if(!validDate(date))throw Error('Choose a valid class date.');
+  if(date===sessionDate)throw Error('To continue this date, cancel and choose Resume this class.');
+  if(finishedDates.includes(date))throw Error('That date is already finished. Choose a different class date.');
+  localStorage.setItem(CLASS_DATE,date);sessionDate=date;absenceText=null;questionText=null;
+  $('new-class-dialog').close();notice('');render();
+  notice(selectedAttendance()?'Existing attendance loaded for this date. Saved questions and participation progress are kept.':'Enter the absent numbers and save attendance before drawing.');
+  $('absent').focus();
 });
 document.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>$(button.dataset.close).close());
 function preview(next){if(endpoint)throw Error('Cloud progress is active. Use Refresh names to update the roster without replacing turns.');if(bonus?.isOpen()||bonus?.hasUnsavedResult()||bonus?.getEntrants().length)throw Error('Finish the Bonus round before importing.');incoming=migrateState(next);$('import-summary').textContent=`${incoming.students.length} students, including names when available. This replaces the draw progress in this browser.`;$('import-preview').hidden=false;}
@@ -351,6 +371,7 @@ async function activate(){
   try{
     sessionStorage.removeItem(LEGACY_SECRET);
     try{const dates=JSON.parse(localStorage.getItem(FINISHED)||'[]');finishedDates=Array.isArray(dates)?dates.filter(validDate):[];}catch{finishedDates=[];}
+    const selectedDate=localStorage.getItem(CLASS_DATE);if(validDate(selectedDate))sessionDate=selectedDate;
     const saved=localStorage.getItem(KEY),legacy=localStorage.getItem(OLD_KEY);
     if(saved||legacy){cache(migrateState(JSON.parse(saved||legacy)));localStorage.removeItem(OLD_KEY);}
     if(testMode&&!cloudDefaults.student)throw Error('The separate Google test connection is not deployed yet.');
