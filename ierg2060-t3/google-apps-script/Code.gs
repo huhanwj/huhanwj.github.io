@@ -74,6 +74,7 @@ function setupTest_() {
   if (roster.length !== 35 || roster.some((p,i) => p.no !== i+1 || p.name !== 'Test Student ' + String(i+1).padStart(2,'0') || p.q.some(Boolean))) throw Error('The test roster must contain exactly the 35 fictional students.');
   const document = read_();
   if (!document.state) throw Error('The test state is missing. Recover the test spreadsheet without resetting production.');
+  syncAttendanceSheet_(book, document);
   refreshNames_(document.state,roster);
   const reportsWarning = refreshReports_(book,document);
   console.log('Test storage: ' + storageUrl_());
@@ -121,6 +122,7 @@ function setup_() {
   }
   roster_();
   const document = read_();
+  syncAttendanceSheet_(book, document);
   const reportsWarning = refreshReports_(book, document);
   console.log('Private storage: ' + storageUrl_());
   return Object.assign(ownerMetadata_(document), reportsWarning ? {reportsWarning:reportsWarning} : {});
@@ -161,6 +163,7 @@ function rpc(action, payload, sessionToken) {
   if (action === 'load') {
     return locked_(function () {
       const document = read_(), roster = roster_();
+      syncAttendanceSheet_(book_(), document);
       if (document.state) refreshNames_(document.state, roster);
       return Object.assign({state:document.state,revision:document.revision,roster:roster}, ownerMetadata_(document));
     });
@@ -177,6 +180,9 @@ function rpc(action, payload, sessionToken) {
       if (prior.fingerprint !== fingerprint) throw Error('This requestId was already used for a different operation.');
       return result_(document, action, prior.room);
     }
+    // Preserve Sheet corrections before a new owner action can regenerate reports.
+    // Exact committed retries above retain their original receipt semantics.
+    if (['initialize','save','attendanceSave','bonusDraw'].includes(action)) syncAttendanceSheet_(book_(), document);
     let roomReceipt;
     if (action === 'save' || action === 'initialize') {
       if (payload.revision !== document.revision) throw Error('Cloud progress changed. Reload before saving.');
@@ -652,8 +658,150 @@ function refreshRecords() {
 }
 function refreshRecords_() {
   const document = read_();
+  syncAttendanceSheet_(book_(), document);
   const reportsWarning = refreshReports_(book_(), document);
   return Object.assign({state:document.state,revision:document.revision}, ownerMetadata_(document), reportsWarning ? {reportsWarning:reportsWarning} : {});
+}
+
+// Explicit, owner-only upgrade: existing human edits have no rendered baseline.
+// Back up both inputs before accepting this one-time grid as attendance truth.
+function setupAttendanceEditing() {
+  authenticate_();
+  if (TEST_DEPLOYMENT_ONLY_) throw Error('Use setupTestAttendanceEditing for test storage.');
+  return locked_(setupAttendanceEditing_);
+}
+function setupTestAttendanceEditing() {
+  authenticate_();
+  return testContext_(function () {return locked_(setupAttendanceEditing_);});
+}
+function setupAttendanceEditing_() {
+  const book = book_(), document = read_();
+  const baseline = attendanceBaseline_(book, document);
+  if (!baseline && book.getSheetByName('出勤记录')) {
+    const grid = attendanceGrid_(book, document, attendanceSnapshot_(document));
+    const stamp = Utilities.getUuid().slice(0,8);
+    book.getSheetByName('出勤记录').copyTo(book).setName('Attendance backup ' + stamp).hideSheet();
+    book.getSheetByName('State').copyTo(book).setName('State backup ' + stamp).hideSheet();
+    SpreadsheetApp.flush();
+    // Validate everything before changing any canonical date. No participation,
+    // current draw exclusion list, request receipt, or Bonus snapshot is edited.
+    let changed = false;
+    grid.attendance.forEach(row => {
+      const current = document.attendance.find(item => item.date === row.date);
+      if (!sameNumbers_(current.absent, row.absent)) {
+        saveAttendance_(document, row.date, row.absent);
+        changed = true;
+      }
+    });
+    if (changed) {document.revision++;write_(document, false);}
+    saveAttendanceBaseline_(book, grid);
+  } else syncAttendanceSheet_(book, document);
+  const reportsWarning = refreshReports_(book, document);
+  return Object.assign({state:document.state,revision:document.revision}, ownerMetadata_(document), reportsWarning ? {reportsWarning:reportsWarning} : {});
+}
+function sameNumbers_(left, right) {
+  return JSON.stringify(left.slice().sort((a,b) => a-b)) === JSON.stringify(right.slice().sort((a,b) => a-b));
+}
+function attendanceSnapshot_(document) {
+  return {version:1,numbers:(document.state ? document.state.students : roster_()).map(p => p.no).sort((a,b) => a-b),
+    attendance:document.attendance.map(row => ({date:row.date,absent:row.absent.slice().sort((a,b) => a-b)})).sort((a,b) => a.date.localeCompare(b.date))};
+}
+function attendanceBaseline_(book, document) {
+  const sheet = book.getSheetByName('Attendance sync');
+  if (!sheet) return null;
+  const invalid = () => {throw Error('Attendance sync baseline is invalid. Recover it from the private backup before refreshing.');};
+  let baseline;
+  try {baseline=JSON.parse(sheet.getRange('A1').getValue());} catch (error) {invalid();}
+  const snapshot = attendanceSnapshot_(document), known = new Set(snapshot.numbers), dates = new Set();
+  if (!baseline || baseline.version !== 1 || !Array.isArray(baseline.numbers) || !sameNumbers_(baseline.numbers,snapshot.numbers) || !Array.isArray(baseline.attendance)) invalid();
+  baseline.attendance.forEach(row => {
+    if (!row || dates.has(row.date) || !snapshot.attendance.some(item => item.date === row.date)) invalid();
+    date_(row.date);numbers_(row.absent,known,true);dates.add(row.date);
+  });
+  return baseline;
+}
+function saveAttendanceBaseline_(book, snapshot) {
+  const text = JSON.stringify({version:1,numbers:snapshot.numbers,attendance:snapshot.attendance});
+  if (text.length > 45000) throw Error('Attendance sync baseline is full. Export a private backup before archiving dates.');
+  const sheet = book.getSheetByName('Attendance sync') || book.insertSheet('Attendance sync');
+  sheet.getRange('A1').setValue(text);
+  sheet.hideSheet();
+  // A following website revision check can intentionally reject its stale
+  // payload; make the preceding Sheet import's baseline durable first.
+  SpreadsheetApp.flush();
+}
+function attendanceGrid_(book, document, baseline) {
+  const sheet = book.getSheetByName('出勤记录');
+  const invalid = () => {throw Error('Attendance sheet must keep every roster No., saved date, and exact 到场/缺席 value. Restore missing or invalid cells before refreshing.');};
+  if (!sheet) invalid();
+  const width = sheet.getLastColumn(), height = sheet.getLastRow();
+  const snapshot = attendanceSnapshot_(document), known = new Set(snapshot.numbers);
+  if (width < 4 || height !== snapshot.numbers.length+4) invalid();
+  const headers = sheet.getRange(4,1,1,width).getDisplayValues()[0];
+  if (headers.slice(0,4).join('|') !== 'No.|Name|到场次数|缺席次数') invalid();
+  const dates = headers.slice(4), seenDates = new Set();
+  dates.forEach(date => {
+    if (seenDates.has(date) || !snapshot.attendance.some(row => row.date === date)) invalid();
+    date_(date);seenDates.add(date);
+  });
+  if (baseline.attendance.some(row => !seenDates.has(row.date))) invalid();
+  const values = snapshot.numbers.length ? sheet.getRange(5,1,snapshot.numbers.length,width).getValues() : [];
+  const formulas = dates.length && values.length ? sheet.getRange(5,5,values.length,dates.length).getFormulas() : [];
+  const numbers = [], seen = new Set(), attendance = dates.map(date => ({date:date,absent:[]}));
+  values.forEach((row,index) => {
+    const no = row[0];
+    if (!Number.isSafeInteger(no) || !known.has(no) || seen.has(no)) invalid();
+    seen.add(no);numbers.push(no);
+    row.slice(4).forEach((value,column) => {
+      if (formulas[index][column] || (value !== '到场' && value !== '缺席')) invalid();
+      if (value === '缺席') attendance[column].absent.push(no);
+    });
+  });
+  attendance.forEach(row => row.absent.sort((a,b) => a-b));
+  return {version:1,numbers:numbers,names:values.map(row => row[1]),attendance:attendance};
+}
+function attendanceSheetChanges_(document, baseline, grid) {
+  const changes = [];
+  grid.attendance.forEach(row => {
+    const current = document.attendance.find(item => item.date === row.date);
+    const before = baseline.attendance.find(item => item.date === row.date);
+    // A previous refresh can fail after adding a new date but before saving its
+    // baseline. Such a column must match canonical data before it can be trusted.
+    if (!before) {
+      if (!sameNumbers_(current.absent,row.absent)) throw Error('An incomplete attendance refresh needs recovery; the new date column differs from saved attendance.');
+      return;
+    }
+    const old = new Set(before.absent), sheet = new Set(row.absent), merged = new Set(current.absent);
+    grid.numbers.forEach(no => {
+      if (old.has(no) === sheet.has(no)) return;
+      if (merged.has(no) !== old.has(no) && merged.has(no) !== sheet.has(no)) throw Error('Attendance changed in both editors. Reload before correcting it.');
+      if (sheet.has(no)) merged.add(no);else merged.delete(no);
+    });
+    const absent = Array.from(merged).sort((a,b) => a-b);
+    if (!sameNumbers_(current.absent,absent)) changes.push({date:row.date,absent:absent});
+  });
+  return changes;
+}
+function syncAttendanceSheet_(book, document) {
+  const baseline = attendanceBaseline_(book, document);
+  if (!baseline) {
+    if (book.getSheetByName('出勤记录')) throw Error('Run owner-only setupAttendanceEditing() once to preserve the existing attendance sheet before refreshing.');
+    return;
+  }
+  const grid = attendanceGrid_(book,document,baseline);
+  const changes = attendanceSheetChanges_(document,baseline,grid);
+  if (changes.length) {
+    changes.forEach(row => saveAttendance_(document,row.date,row.absent));
+    document.revision++;
+    write_(document,false);
+  }
+  // Remember the observed grid after a successful import, even when canonical
+  // data already matched. Otherwise toggling a cell back before a report refresh
+  // would look unchanged against the older baseline and lose the correction.
+  if (baseline.attendance.length !== grid.attendance.length || grid.attendance.some(row => {
+    const before = baseline.attendance.find(item => item.date === row.date);
+    return !before || !sameNumbers_(before.absent,row.absent);
+  })) saveAttendanceBaseline_(book,grid);
 }
 function refreshReports_(book, document) {
   try {
@@ -699,24 +847,69 @@ function reportSheet_(book, name, title, note, headers, rows) {
   sheet.showSheet();
   return sheet;
 }
+function attendanceReport_(book, document, students) {
+  let sheet = book.getSheetByName('出勤记录');
+  const snapshot = attendanceSnapshot_(document), baseline = attendanceBaseline_(book,document);
+  let grid;
+  if (sheet) {
+    if (!baseline) throw Error('Run owner-only setupAttendanceEditing() before refreshing the existing attendance sheet.');
+    grid = attendanceGrid_(book,document,baseline);
+    // A human may have edited after the pre-save import. Keep those cells for
+    // the next authenticated synchronization instead of erasing them here.
+    if (attendanceSheetChanges_(document,baseline,grid).length) throw Error('Attendance was edited during refresh. Reload to save the Sheet corrections.');
+  } else {
+    if (baseline) throw Error('The editable attendance sheet is missing. Restore it from the private backup.');
+    const rows = students.map(p => [p.no,p.name,0,0].concat(snapshot.attendance.map(row => row.absent.includes(p.no) ? '缺席' : '到场')));
+    sheet = reportSheet_(book,'出勤记录','Tutorial 3 · 出勤记录','',
+      ['No.','Name','到场次数','缺席次数'].concat(snapshot.attendance.map(row => row.date)),rows);
+    grid={version:1,numbers:students.map(p => p.no),names:students.map(p => p.name),attendance:snapshot.attendance};
+  }
+  const names = new Map(students.map(p => [p.no,p.name]));
+  const dates = grid.attendance.map(row => row.date);
+  snapshot.attendance.forEach(row => {if (!dates.includes(row.date)) dates.push(row.date);});
+  if (sheet.getMaxColumns() < dates.length+4) sheet.insertColumnsAfter(sheet.getMaxColumns(),dates.length+4-sheet.getMaxColumns());
+  sheet.getRange(2,1).setValue('可直接修改日期列的到场/缺席；次数自动计算。重新加载网站或刷新记录时保存更正。请保留全部学生和日期。');
+  dates.forEach((date,column) => {
+    if (grid.attendance.some(row => row.date === date)) return;
+    const current = snapshot.attendance.find(row => row.date === date);
+    sheet.getRange(4,column+5).setNumberFormat('@');
+    // Add a complete dated column in one operation, so a retry need not infer
+    // attendance from an empty column left between header and body writes.
+    sheet.getRange(4,column+5,grid.numbers.length+1,1).setValues([[date]].concat(grid.numbers.map(no => [current.absent.includes(no) ? '缺席' : '到场'])));
+  });
+  grid.numbers.forEach((no,index) => {
+    const rowIndex = index+5, name = names.get(no);
+    if (grid.names[index] !== name) sheet.getRange(rowIndex,2).setValue(typeof name === 'string' && /^[=+\-@]/.test(name) ? "'"+name : name);
+    dates.forEach((date,column) => {
+      const current = snapshot.attendance.find(row => row.date === date);
+      const previous = grid.attendance.find(row => row.date === date);
+      const absent = current.absent.includes(no);
+      if (previous && previous.absent.includes(no) !== absent) sheet.getRange(rowIndex,column+5).setValue(absent ? '缺席' : '到场');
+    });
+  });
+  if (grid.numbers.length) {
+    const end = attendanceColumn_(dates.length+4);
+    sheet.getRange(5,3,grid.numbers.length,2).setFormulas(grid.numbers.map((no,index) => dates.length ?
+      ['=COUNTIF(E'+(index+5)+':'+end+(index+5)+',"到场")','=COUNTIF(E'+(index+5)+':'+end+(index+5)+',"缺席")'] : ['=0','=0']));
+    if (dates.length) sheet.getRange(5,5,grid.numbers.length,dates.length).setBackgrounds(grid.numbers.map(no => dates.map(date => snapshot.attendance.find(row => row.date === date).absent.includes(no) ? '#fde8df' : '#e6f2ed')));
+  }
+  // Advance the baseline only after all attendance cells were written. If any
+  // write fails, the old baseline still distinguishes stale cells from edits.
+  SpreadsheetApp.flush();
+  saveAttendanceBaseline_(book,snapshot);
+  return sheet;
+}
+function attendanceColumn_(column) {
+  let name = '';
+  while (column) {column--;name=String.fromCharCode(65+column%26)+name;column=Math.floor(column/26);}
+  return name;
+}
 function reports_(book, document) {
   const roster = roster_();
   const students = document.state ? document.state.students : roster;
   if (document.state) refreshNames_(document.state, roster);
   const byNo = new Map(students.map(p => [p.no,p]));
-  const attendance = document.attendance.slice().sort((a,b) => a.date.localeCompare(b.date));
-  const absentByDate = attendance.map(row => new Set(row.absent));
-  const attendanceRows = students.map(p => {
-    const absentCount = absentByDate.filter(absent => absent.has(p.no)).length;
-    return [p.no,p.name,attendance.length-absentCount,absentCount].concat(absentByDate.map(absent => absent.has(p.no) ? '缺席' : '到场'));
-  });
-  const attendanceSheet = reportSheet_(book, '出勤记录', 'Tutorial 3 · 出勤记录',
-    '仅统计网站明确保存的课堂日期；同一天再次保存会更新该日记录。' + (attendance.length ? '' : '目前没有已保存的出勤日期。') + '请在网站维护，表格改动会被覆盖。',
-    ['No.','Name','到场次数','缺席次数'].concat(attendance.map(row => row.date)), attendanceRows);
-  if (attendance.length && students.length) {
-    const backgrounds = attendanceRows.map(row => row.slice(4).map(value => value === '缺席' ? '#fde8df' : '#e6f2ed'));
-    attendanceSheet.getRange(5,5,students.length,attendance.length).setBackgrounds(backgrounds);
-  }
+  const attendanceSheet = attendanceReport_(book,document,students);
   const history = [], drawn = new Set();
   if (document.state) {
     document.state.batches.forEach((batch,index) => batch.numbers.forEach((no,question) => {
