@@ -1,4 +1,4 @@
-import {fromSheet, validateState, migrateState, mergeRoster, round, eligible, parseAbsent, drawBatch} from './core.js?v=8';
+import {fromSheet, validateState, migrateState, mergeRoster, round, eligible, parseAbsent, drawBatch} from './core.js?v=9';
 import {setupBonus} from './bonus.js?v=6';
 import {setupCloudBonus} from './cloud-bonus.js?v=11';
 import {createCloudClient, cloudEndpoint} from './cloud.js?v=10';
@@ -94,8 +94,7 @@ function restoreAnswer(){
 async function revealStudent({absent=absentInput(),question=questionNumber(),date=dateInput(),exclude=null}={}){
   if(absent===null)return;
   requireAttendance(date,absent);
-  const drawAbsences=exclude===null?absent:[...new Set([...absent,exclude])];
-  const next=drawBatch({...state,absent:drawAbsences},1,question);next.absent=absent.slice();
+  const next=drawBatch({...state,absent},1,question,exclude);
   draft={state:next,revision,sessionDate:date};
   revealing=true;$('announcement').textContent='Drawing one student.';notice('');render();
   try{if(!window.matchMedia('(prefers-reduced-motion: reduce)').matches)await new Promise(resolve=>setTimeout(resolve,1100));}
@@ -114,14 +113,14 @@ function previewResults(numbers=[],questionStart=1){
 }
 function absentInput(){try{const absent=parseAbsent($('absent').value,state?.students||[]);$('absence-form').classList.remove('invalid');$('absent').removeAttribute('aria-invalid');$('absence-help').textContent='No. separated by commas · no spaces · leave empty if none';return absent;}catch(error){$('absence-form').classList.add('invalid');$('absent').setAttribute('aria-invalid','true');$('absence-help').textContent=error.message;return null;}}
 function controls(){
-  const absent=absentInput(),q=state?round(state):0,pool=state&&absent?eligible({...state,absent}):[];
+  const absent=absentInput(),q=state&&absent?round({...state,absent}):2,pool=state&&absent?eligible({...state,absent}):[];
   let n=0;try{n=questionNumber();}catch{}
   const attendanceSaved=attendanceReady($('session-date').value,absent);
   const locked=connecting||revealing||busy||!!pending||!!initial||!!endpoint&&!connected||!writable;
   $('draw').disabled=sessionFinished()||locked||!!answer||!!draft||!state||!pool.length||!n||absent===null||!attendanceSaved;
   $('draw-label').textContent=revealing?'Drawing…':busy?'Saving…':!attendanceSaved?'Save attendance first':'Draw one student';
   $('pool-count').replaceChildren(document.createTextNode(`${pool.length} `));const small=document.createElement('small');small.textContent='available';$('pool-count').append(small);
-  $('next-round').textContent=q===2?'BOTH ROUNDS DRAWN':'ELIGIBLE STUDENTS';
+  $('next-round').textContent=q===2?'NO ELIGIBLE STUDENTS':`PARTICIPATION ROUND ${q+1}`;
   $('session-date').disabled=locked||!!draft||!!answer;$('question').disabled=locked||!!draft||!!answer;$('absent').disabled=locked||!!draft||!!answer;$('backup').disabled=!state;$('bonus-open').disabled=sessionFinished()||locked||!!draft||!state||absent===null||!!endpoint&&!studentEndpoint;
   $('answer-bonus').disabled=$('bonus-open').disabled||!answerBatch();
   $('session-finish').disabled=locked||!state||sessionFinished();
@@ -176,8 +175,8 @@ function render(){
   $('deck-caption').textContent=revealing?'Drawing…':batch?`${batch.numbers.length} ${batch.numbers.length===1?'student':'students'} selected${draft?' · Preview':pending?' · Save not confirmed':''}`:'';
   previewResults(batch?.numbers,batch?.questionStart||1);controls();
   if(!state)notice(connecting?'Connecting to Google Sheets…':endpoint?'Sign in with Google to load this class.':'Connecting to Google Sheets…');
-  else if(!draft&&!pending&&round(state)===2)notice('Both participation rounds are complete.');
-  else if(!draft&&!pending&&!eligible({...state,absent:absentInput()||[]}).length)notice('The remaining students in this round are absent. This round stays open.');
+  else if(!draft&&!pending&&state.students.every(p=>p.q.every(Boolean)))notice('Both participation rounds are complete.');
+  else if(!draft&&!pending&&!eligible({...state,absent:absentInput()||[]}).length)notice('No present students have a remaining turn. Absent students keep their unfinished turns.');
 }
 async function exclusive(fn){if(busy)return;busy=true;controls();try{return await fn();}finally{busy=false;controls();}}
 $('draw').onclick=handle(async()=>{

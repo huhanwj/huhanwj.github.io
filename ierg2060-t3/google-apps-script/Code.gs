@@ -539,7 +539,7 @@ function cleanState_(input, roster) {
   if (!input || input.version !== 2 || !Array.isArray(input.students) || input.students.length !== roster.length) throw Error('The cloud state must match the Tutorial 3 roster.');
   const known = new Set(roster.map(p => p.no)), names = new Map(roster.map(p => [p.no,p.name]));
   const students = input.students.map(p => {
-    if (!p || !known.has(p.no) || !Array.isArray(p.q) || p.q.length !== 2 || p.q.some(q => typeof q !== 'boolean')) throw Error('Invalid participation progress.');
+    if (!p || !known.has(p.no) || !Array.isArray(p.q) || p.q.length !== 2 || p.q.some(q => typeof q !== 'boolean') || (p.q[1] && !p.q[0])) throw Error('Invalid participation progress.');
     return {no:p.no,name:names.get(p.no),q:p.q.slice()};
   }).sort((a,b) => a.no-b.no);
   if (new Set(students.map(p => p.no)).size !== roster.length) throw Error('Duplicate roster numbers.');
@@ -567,8 +567,9 @@ function cleanState_(input, roster) {
   const replay = new Map(students.map(p => [p.no,p.q.slice()]));
   batches.forEach(b => b.numbers.forEach(no => {replay.get(no)[b.q]=false;}));
   batches.forEach(b => {
-    const active = [0,1].find(q => students.some(p => !replay.get(p.no)[q]));
-    if (active !== b.q) throw Error('Finish the first class round before starting the second.');
+    // Old batches have no attendance snapshot. Validate each student's order
+    // without applying today's absences to saved history.
+    if (b.q === 1 && b.numbers.some(no => !replay.get(no)[0])) throw Error('A student must complete Q1 before Q2.');
     b.numbers.forEach(no => {replay.get(no)[b.q]=true;});
   });
   const rounds = new Set();
@@ -597,6 +598,17 @@ function forwardOnly_(old, next) {
   added.forEach(b => b.numbers.forEach(no => {
     if (previous.get(no).q[b.q] || next.absent.includes(no)) throw Error('A new batch contains a previously drawn or absent student.');
   }));
+  // For new draws, the save action verifies this exclusion list against the
+  // class date's saved attendance before committing. Replay sequential batches
+  // so Q2 can start once all present students have completed Q1, and a returning
+  // student's unfinished Q1 takes priority on a later date.
+  const replay = new Map(old.students.map(p => [p.no,p.q.slice()]));
+  const present = old.students.filter(p => !next.absent.includes(p.no));
+  added.forEach(b => {
+    const active = [0,1].find(q => present.some(p => !replay.get(p.no)[q]));
+    if (active !== b.q) throw Error('Finish Q1 for present students before drawing Q2.');
+    b.numbers.forEach(no => {replay.get(no)[b.q]=true;});
+  });
 }
 function digest_(value) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,JSON.stringify(value),Utilities.Charset.UTF_8).map(n => (n+256).toString(16).slice(-2)).join('');

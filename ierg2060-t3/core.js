@@ -82,6 +82,7 @@ export function validateState(s) {
   if (!s || s.version !== 2 || !Array.isArray(s.students) || !s.students.length || s.students.length > 500) throw Error('Invalid backup format.');
   const students = s.students.map(p => {
     if (!p || !Number.isSafeInteger(p.no) || p.no < 1 || !Array.isArray(p.q) || p.q.length !== 2 || [...p.q].some(q => typeof q !== 'boolean')) throw Error('Invalid roster number or participation progress.');
+    if (p.q[1] && !p.q[0]) throw Error('A student must complete their first round before their second.');
     return { no: p.no, name: studentName(p.name), q: [...p.q] };
   }).sort((a, b) => a.no - b.no);
   const known = new Set(students.map(p => p.no));
@@ -105,12 +106,13 @@ export function validateState(s) {
     if (Object.prototype.hasOwnProperty.call(entry, 'questionStart')) batch.questionStart = checkedQuestionStart(entry.questionStart, numbers.length);
     return batch;
   });
-  // Reconstruct imported progress, then verify every retained batch was in its round.
+  // Old batches have no attendance snapshot. Check each student's order here;
+  // the server checks today's attendance and round priority for every new save.
   const replay = { students: students.map(p => ({ no: p.no, q: [...p.q] })) };
   const replayByNo = new Map(replay.students.map(p => [p.no, p]));
   for (const entry of batches) for (const no of entry.numbers) replayByNo.get(no).q[entry.q] = false;
   for (const entry of batches) {
-    if (round(replay) !== entry.q) throw Error('Everyone must complete the first round before the second round begins.');
+    if (entry.q === 1 && entry.numbers.some(no => !replayByNo.get(no).q[0])) throw Error('A student must complete their first round before their second.');
     for (const no of entry.numbers) replayByNo.get(no).q[entry.q] = true;
   }
   const rounds = new Set();
@@ -158,7 +160,8 @@ export function migrateState(old) {
 }
 
 export function round(s) {
-  return [0, 1].find(q => s.students.some(p => !p.q[q])) ?? 2;
+  const absent = new Set(s.absent || []);
+  return [0, 1].find(q => s.students.some(p => !absent.has(p.no) && !p.q[q])) ?? 2;
 }
 
 export function eligible(s) {
@@ -179,11 +182,11 @@ export function pick(items) {
   return items[value[0] % items.length];
 }
 
-export function drawBatch(s, n, questionStart) {
+export function drawBatch(s, n, questionStart, exclude = null) {
   const state = validateState(s);
   if (!Number.isSafeInteger(n) || n < 1 || n > 500) throw Error('Draw count must be an integer from 1 to 500.');
-  const q = round(state), pool = eligible(state).map(p => p.no), numbers = [];
-  if (!pool.length) throw Error(q === 2 ? 'Everyone has completed both rounds.' : 'The remaining students in this round are absent. This round stays open.');
+  const q = round(state), pool = eligible(state).map(p => p.no).filter(no => no !== exclude), numbers = [];
+  if (!pool.length) throw Error(q === 2 ? 'No present students have a remaining turn.' : 'No other student is available in this participation round.');
   const count = Math.min(n, pool.length);
   if (questionStart !== undefined) checkedQuestionStart(questionStart, count);
   for (let i = 0; i < count; i++) {
