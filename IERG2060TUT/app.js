@@ -16,7 +16,7 @@ function showGroup(label){
   document.title=`${testMode?'TEST · ':''}IERG2060 · ${label}`;
   $('environment-status').textContent=`${label} · ${testMode?'Test dataset · 35 fictional students':'Live class data'}`;
 }
-showGroup(groupId==='t3'?'Tutorial 3':groupId);
+showGroup(groupChoices.find(choice=>choice.id===groupId)?.label||groupId);
 
 let cloud=null,connected=false,connecting=false,signingIn=false,busy=false,writable=false,revealing=false;
 let state=null,revision=-1,room=null,pending=null,current=null,preview=null,questionText=null,pollTimer=null,polling=false,recordsWarning='';
