@@ -1,4 +1,4 @@
-import {testMode as configuredTestMode} from './cloud-config.js?v=8';
+import {testMode as configuredTestMode} from './cloud-config.js?v=9';
 
 // Apps Script's HTML bridge handles Google requests without cross-origin fetch.
 export function cloudEndpoint(value) {
@@ -7,9 +7,10 @@ export function cloudEndpoint(value) {
   return `${url.origin}${url.pathname}`;
 }
 
-export function createCloudClient(value,{getSessionToken,testMode=configuredTestMode}={}) {
+export function createCloudClient(value,{getSessionToken,testMode=configuredTestMode,group='t3'}={}) {
   const endpoint=cloudEndpoint(value),url=new URL(endpoint),channel=crypto.randomUUID();
-  url.search = new URLSearchParams({channel,...(testMode === true ? {test:'1'} : {})}).toString(); url.hash = '';
+  // The bridge serves one tutorial group; test mode is Tutorial 3 only.
+  url.search = new URLSearchParams({channel,...(testMode === true ? {test:'1'} : group !== 't3' ? {group} : {})}).toString(); url.hash = '';
   const frame = document.createElement('iframe');
   frame.hidden = true; frame.title = 'Google Sheets connection'; frame.src = url.href;
   let source = null, origin = null, stopped = false, stopError = null, readyResolve, readyReject;

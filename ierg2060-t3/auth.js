@@ -1,6 +1,7 @@
-import {cloudDefaults, testMode as configuredTestMode} from './cloud-config.js?v=8';
+import {cloudDefaults, testMode as configuredTestMode} from './cloud-config.js?v=9';
 
 const AUTH_ORIGIN = 'https://huhanwj.github.io';
+// One backend serves every group; a session lists the groups it may open.
 const sessionKey = testMode => testMode === true ? 'ierg2060-test:ierg2060-auth-session' : 'ierg2060-auth-session';
 const SECRET = /^[a-f0-9]{64}$/;
 const SIGN_IN_TIMEOUT = 5 * 60 * 1000;
@@ -10,7 +11,35 @@ function sessionValue(value) {
   if (!value || typeof value !== 'object' || typeof value.token !== 'string' || !SECRET.test(value.token) ||
       typeof value.expiresAt !== 'number' || !Number.isFinite(value.expiresAt) || value.expiresAt <= Date.now() ||
       typeof value.email !== 'string' || !value.email.trim() || value.email.length > 254) return null;
-  return {token: value.token, expiresAt: value.expiresAt, email: value.email};
+  const groups = Array.isArray(value.groups) ? value.groups.filter(g => g && typeof g.id === 'string' && /^[a-z0-9]{1,16}$/.test(g.id) && typeof g.label === 'string').map(g => ({id: g.id, label: g.label.slice(0, 80)})) : null;
+  return {token: value.token, expiresAt: value.expiresAt, email: value.email, groups};
+}
+
+// Stores a session returned by the backend's googleLogin action.
+export function saveSession(value, {testMode=configuredTestMode}={}) {
+  const session = sessionValue(value);
+  if (!session) throw Error('Google returned an invalid sign-in session. Sign in again.');
+  try {sessionStorage.setItem(sessionKey(testMode), JSON.stringify(session));}
+  catch (_) {throw Error('This browser cannot save the sign-in session. Allow session storage and sign in again.');}
+  return session;
+}
+
+// Renders the standard "Sign in with Google" button. Google's script returns a
+// signed ID token, which only the backend verifies and exchanges for a session.
+let gisLoading = null;
+export function renderGoogleButton(container, clientId, onCredential) {
+  gisLoading ||= new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.onload = resolve;
+    script.onerror = () => {gisLoading = null; reject(Error('Google sign-in could not load. Check the connection and reload.'));};
+    document.head.append(script);
+  });
+  return gisLoading.then(() => {
+    globalThis.google.accounts.id.initialize({client_id: clientId, callback: response => onCredential(response.credential), auto_select: false, cancel_on_tap_outside: true});
+    container.replaceChildren();
+    globalThis.google.accounts.id.renderButton(container, {theme: 'filled_blue', size: 'large', shape: 'pill', text: 'signin_with'});
+  });
 }
 
 export function clearSession({testMode=configuredTestMode}={}) {

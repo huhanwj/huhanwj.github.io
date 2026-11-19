@@ -1,6 +1,6 @@
-import {createCloudClient} from './cloud.js?v=10';
-import {cloudDefaults, testMode} from './cloud-config.js?v=8';
-import {readSession, beginSignIn} from './auth.js?v=2';
+import {createCloudClient} from './cloud.js?v=11';
+import {cloudDefaults, testMode} from './cloud-config.js?v=9';
+import {readSession, beginSignIn} from './auth.js?v=3';
 
 const $ = id => document.getElementById(id);
 const mode = {testMode: true};

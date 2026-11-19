@@ -1,6 +1,61 @@
-/* Private, owner-executed persistence. Setup requires the signed-in owner. */
-const SOURCE_GID_ = 521726463;
-const ADMIN_EMAIL_ = 'huhanwj@gmail.com';
+/* Private, owner-executed persistence for every tutorial group. */
+// The owner hosts all groups. Each group's TAs sign in with Google and see only
+// their own group; the owner sees every group. Groups are configured in the
+// "Groups" tab of the Tutorial 3 storage spreadsheet.
+const OWNER_EMAIL_ = 'huhanwj@gmail.com';
+// The public OAuth Web client ID used by "Sign in with Google" on the site.
+const OAUTH_CLIENT_ID_ = '';
+const GROUP_ID_ = /^[a-z0-9]{1,16}$/;
+const GROUPS_SHEET_ = 'Groups';
+const GROUP_HEADERS_ = ['Group ID','Label','Tutorial Class','Answer sheet gid','TA emails'];
+const DEFAULT_GROUPS_ = {t3:{id:'t3',label:'Tutorial 3',tutorialClass:'Tutorial 3',sourceGid:521726463,admins:[]}};
+// The group whose storage this execution uses. Tutorial 3 keeps the original
+// unprefixed Script Properties; other groups use a G_<id>_ prefix.
+let GROUP_ = 't3';
+let GROUPS_ = null;
+function groupContext_(group, fn) {
+  if (typeof group !== 'string' || !GROUP_ID_.test(group)) throw Error('Unknown tutorial group.');
+  const previous = GROUP_;
+  GROUP_ = group;SOURCE_RECORDS_ = null;
+  try {return fn();} finally {GROUP_ = previous;SOURCE_RECORDS_ = null;}
+}
+// Reads the Groups tab once per execution. Without the tab only Tutorial 3 exists.
+function groupsConfig_() {
+  if (GROUPS_) return GROUPS_;
+  const id = PropertiesService.getScriptProperties().getProperty('STORE_ID');
+  const sheet = id ? SpreadsheetApp.openById(id).getSheetByName(GROUPS_SHEET_) : null;
+  if (!sheet) return GROUPS_ = DEFAULT_GROUPS_;
+  const groups = {};
+  sheet.getDataRange().getDisplayValues().slice(1).filter(row => row[0].trim()).forEach(row => {
+    const groupId = row[0].trim().toLowerCase();
+    if (!GROUP_ID_.test(groupId) || groups[groupId]) throw Error('Groups tab: invalid or duplicate group ID "' + row[0] + '".');
+    const gid = Number(row[3].trim());
+    if (!Number.isSafeInteger(gid) || gid < 0) throw Error('Groups tab: group ' + groupId + ' needs the answer sheet gid.');
+    groups[groupId] = {id:groupId,label:row[1].trim() || groupId,tutorialClass:row[2].trim(),sourceGid:gid,
+      admins:row[4].split(/[,;\s]+/).map(email => email.trim().toLowerCase()).filter(Boolean)};
+  });
+  if (!groups.t3) groups.t3 = DEFAULT_GROUPS_.t3;
+  return GROUPS_ = groups;
+}
+function config_() {
+  const group = groupsConfig_()[GROUP_];
+  if (!group) throw Error('Unknown tutorial group.');
+  return group;
+}
+function groupList_(ids) {
+  const groups = groupsConfig_();
+  return Object.keys(groups).filter(id => ids === '*' || ids.includes(id)).map(id => ({id:id,label:groups[id].label}));
+}
+// Run by the owner (or created on the owner's first Google sign-in).
+function ensureGroupsSheet_() {
+  const book = SpreadsheetApp.openById(PropertiesService.getScriptProperties().getProperty('STORE_ID'));
+  if (book.getSheetByName(GROUPS_SHEET_)) return;
+  const sheet = book.insertSheet(GROUPS_SHEET_);
+  sheet.getRange(1,1,2,5).setValues([GROUP_HEADERS_,['t3','Tutorial 3','Tutorial 3','521726463','']]);
+  sheet.getRange(1,1,1,5).setFontWeight('bold');
+  sheet.setFrozenRows(1);
+  sheet.getRange(1,7).setValue('One row per group. TA emails: Gmail addresses separated by commas. The owner can open every group. Students sign up at the QR shown on that group\'s page.');
+}
 const BONUS_META_ = 'BONUS_ACTIVE_V1';
 const BONUS_PENDING_ = 'BONUS_SYNC_V1';
 const BONUS_SLOT_ = 'BONUS_SLOT_V1:';
@@ -25,12 +80,16 @@ function testContext_(fn) {
 function scopedProperty_(key) {
   return key === 'STORE_ID' || key === BONUS_META_ || key === BONUS_PENDING_ || key === SID_INDEX_ || key === SID_SALT_ || key.startsWith(BONUS_SLOT_);
 }
+function storagePrefix_() {
+  return TEST_CONTEXT_ ? 'TEST_' : GROUP_ === 't3' ? '' : 'G_' + GROUP_ + '_';
+}
 function storageProperties_() {
   const properties = PropertiesService.getScriptProperties();
-  if (!TEST_CONTEXT_) return properties;
+  const prefix = storagePrefix_();
+  if (!prefix) return properties;
   const key_ = key => {
-    if (!scopedProperty_(key)) throw Error('Invalid test storage property.');
-    return 'TEST_' + key;
+    if (!scopedProperty_(key)) throw Error('Invalid scoped storage property.');
+    return prefix + key;
   };
   return {
     getProperty:key => properties.getProperty(key_(key)),
@@ -38,7 +97,7 @@ function storageProperties_() {
     deleteProperty:key => properties.deleteProperty(key_(key)),
     getProperties:() => {
       const values = properties.getProperties(), scoped = {};
-      Object.keys(values).filter(key => key.startsWith('TEST_') && scopedProperty_(key.slice(5))).forEach(key => {scoped[key.slice(5)]=values[key];});
+      Object.keys(values).filter(key => key.startsWith(prefix) && scopedProperty_(key.slice(prefix.length))).forEach(key => {scoped[key.slice(prefix.length)]=values[key];});
       return scoped;
     },
     setProperties:values => {
@@ -51,7 +110,7 @@ function storageProperties_() {
 function storeId_() {
   const id = storageProperties_().getProperty('STORE_ID');
   if (!id) throw Error(TEST_CONTEXT_ ? 'Test setup is incomplete. The owner must run setupTest.' : 'Cloud setup is incomplete. The owner must run setup.');
-  if (TEST_CONTEXT_ && id === PropertiesService.getScriptProperties().getProperty('STORE_ID')) throw Error('Test storage must be separate from production.');
+  if (storagePrefix_() && id === PropertiesService.getScriptProperties().getProperty('STORE_ID')) throw Error('Group and test storage must be separate from Tutorial 3.');
   return id;
 }
 
@@ -101,12 +160,15 @@ function setup() {
   return locked_(setup_);
 }
 
+// Creates this group's private storage, roster snapshot and SID index from the
+// teaching sheet. Tutorial 3 runs it from the editor; other groups run it on
+// their first sign-in. Re-running preserves existing storage and progress.
 function setup_() {
-  const properties = PropertiesService.getScriptProperties();
-  properties.deleteProperty('ADMIN_KEY');
+  if (GROUP_ === 't3') PropertiesService.getScriptProperties().deleteProperty('ADMIN_KEY');
+  const properties = storageProperties_();
   let id = properties.getProperty('STORE_ID');
   if (!id) {
-    const book = SpreadsheetApp.create('IERG2060 Tutorial 3 — private draw progress');
+    const book = SpreadsheetApp.create('IERG2060 ' + config_().label + ' — private draw progress');
     book.getSheets()[0].setName('State');
     book.getSheetByName('State').getRange('A1').setValue(JSON.stringify({revision:0,state:null,room:null,requests:[],attendance:[],batchDates:{}}));
     book.insertSheet('Draw log');
@@ -130,8 +192,19 @@ function setup_() {
       throw error;
     }
   }
-  roster_();
+  if (GROUP_ === 't3') ensureGroupsSheet_();
+  const roster = roster_();
   const document = read_();
+  // A new group starts directly from its roster; there is no browser import.
+  if (!document.state) {
+    document.state = {version:2,students:roster.map(p => ({no:p.no,name:p.name,q:p.q.slice()})),absent:[],batches:[],bonus:[],r2Source:[]};
+    document.revision++;
+    write_(document, false);
+  }
+  if (!properties.getProperty(SID_INDEX_)) {
+    try {saveSidIndex_(roster, sourceSids_());}
+    catch (error) {console.warn('SID index not created: ' + (error && error.message));}
+  }
   const reportsWarning = refreshReports_(book, document);
   console.log('Private storage: ' + storageUrl_());
   return Object.assign(ownerMetadata_(document), reportsWarning ? {reportsWarning:reportsWarning} : {});
@@ -142,7 +215,7 @@ function doGet(e) {
     authenticate_();
     const state = loginState_(e.parameter.login);
     const code = loginSecret_();
-    const grant = {state:state,email:ADMIN_EMAIL_,expiresAt:Date.now()+300000};
+    const grant = {state:state,email:OWNER_EMAIL_,expiresAt:Date.now()+300000};
     CacheService.getScriptCache().put(loginCacheKey_('grant', code), JSON.stringify(grant), 300);
     const template = HtmlService.createTemplateFromFile('SignIn');
     template.continueUrl = 'https://huhanwj.github.io/ierg2060-t3/auth-callback.html#code=' + code + '&state=' + state;
@@ -156,21 +229,33 @@ function doGet(e) {
   const channel = e && e.parameter && e.parameter.channel;
   template.channel = typeof channel === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(channel) ? channel : '';
   template.testMode = TEST_DEPLOYMENT_ONLY_ || e.parameter.test === '1';
+  const group = e.parameter.group;
+  template.group = !template.testMode && typeof group === 'string' && GROUP_ID_.test(group) ? group : 't3';
   return template.evaluate().setTitle('IERG2060 cloud connection').setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
+// Bridges for groups other than Tutorial 3 call this with their group ID.
+function rpcGroup(group, action, payload, sessionToken) {
+  if (TEST_DEPLOYMENT_ONLY_) throw Error('This deployment is test-only.');
+  return groupContext_(group, function () {return rpc(action,payload,sessionToken);});
+}
 function rpc(action, payload, sessionToken) {
   if (payload === undefined || payload === null) payload = {};
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw Error('Invalid cloud request.');
   const publicAction = action === 'bonusJoin' || action === 'bonusInfo';
   if (publicAction) return publicRpc_(action, payload);
   if (action === 'exchangeLogin') return exchangeLogin_(payload);
-  const email = sessionToken === undefined ? authenticate_() : authenticateSession_(sessionToken);
+  if (action === 'googleLogin') return googleLogin_(payload);
+  const session = sessionToken === undefined ? {email:authenticate_(),groups:'*'} : authenticateSession_(sessionToken);
+  // TAs reach only their own groups; test data belongs to the owner.
+  if ((TEST_CONTEXT_ && session.groups !== '*') || (session.groups !== '*' && !session.groups.includes(GROUP_))) throw Error('This Google account cannot open this tutorial group.');
+  const email = session.email;
   if (Object.prototype.hasOwnProperty.call(payload, 'adminKey') || Object.prototype.hasOwnProperty.call(payload, 'email')) throw Error('Account credentials must not be supplied in a cloud request.');
-  if (action === 'auth') return {ok:true,email:email,environment:TEST_CONTEXT_ ? 'test' : 'production'};
+  if (action === 'auth') return {ok:true,email:email,environment:TEST_CONTEXT_ ? 'test' : 'production',group:GROUP_,groups:TEST_CONTEXT_ ? [] : groupList_(session.groups)};
   if (action === 'names') return locked_(function () {return Object.assign({roster:roster_()}, ownerMetadata_(read_()));});
   if (action === 'load') {
     return locked_(function () {
+      if (!TEST_CONTEXT_ && !storageProperties_().getProperty('STORE_ID')) setup_();
       const document = read_(), roster = roster_();
       if (document.state) refreshNames_(document.state, roster);
       const sync = syncSourceAnswers_(document);
@@ -181,7 +266,7 @@ function rpc(action, payload, sessionToken) {
   if (action === 'recordsRefresh') return locked_(refreshRecords_);
   if (action === 'bonusStatus') return locked_(function () {const document=read_();return Object.assign({room:document.room}, ownerMetadata_(document));});
   if (action === 'bonusLive') return bonusLive_();
-  if (!['initialize','save','attendanceSave','bonusOpen','bonusClose','bonusDraw','bonusReset','bonusRemove','bonusAdd','round2Lottery'].includes(action)) throw Error('Unknown cloud action.');
+  if (!['initialize','save','attendanceSave','bonusOpen','bonusClose','bonusDraw','bonusReset','bonusRemove','bonusAdd','bonusRedraw','round2Lottery'].includes(action)) throw Error('Unknown cloud action.');
   return locked_(function () {
     const document = read_();
     const requestId = token_(payload.requestId, 'A requestId is required.');
@@ -193,7 +278,7 @@ function rpc(action, payload, sessionToken) {
     }
     // Draws use the latest answer records. If the source sheet cannot be read,
     // the last synchronized list is used. Exact retries above keep their receipt.
-    if (['bonusDraw','round2Lottery'].includes(action)) syncSourceAnswers_(document);
+    if (['bonusDraw','bonusRedraw','round2Lottery'].includes(action)) syncSourceAnswers_(document);
     let roomReceipt;
     if (action === 'save' || action === 'initialize') {
       if (payload.revision !== document.revision) throw Error('Cloud progress changed. Reload before saving.');
@@ -265,35 +350,42 @@ function rpc(action, payload, sessionToken) {
         if (!document.state.students.some(p => p.no === payload.no)) throw Error('Unknown roster number.');
         if (!room.entrants.includes(payload.no)) room.entrants = room.entrants.concat(payload.no).sort((a,b) => a-b);
       }
-      if (action === 'bonusDraw') {
-        if (room.winner) {roomReceipt = room;}
+      if (action === 'bonusDraw' || action === 'bonusRedraw') {
+        if (action === 'bonusDraw' && room.winner) {roomReceipt = room;}
         else {
           if (room.open) throw Error('Close Bonus registration before drawing.');
+          // A redraw gives the same question to another volunteer from the same
+          // sign-up; earlier winners of this sign-up are not drawn again.
+          if (action === 'bonusRedraw' && !room.winner) throw Error('Draw a volunteer first.');
+          const drawn = room.winner ? (room.drawn || [room.winner.no]) : [];
           const question = question_(payload.question), date = date_(payload.date);
           const roster = roster_();
           refreshNames_(document.state, roster);
           const absent = new Set(room.absent);
           const eligible = new Set(document.state.students.filter(p => !absent.has(p.no)).map(p => p.no));
           room.entrants = room.entrants.filter(no => eligible.has(no)).sort((a,b) => a-b);
-          if (!room.entrants.length) throw Error('There are no eligible Bonus entries.');
+          const remaining = room.entrants.filter(no => !drawn.includes(no));
+          if (!remaining.length) throw Error(drawn.length ? 'Every volunteer in this sign-up has been drawn.' : 'There are no eligible Bonus entries.');
           // Volunteers who have not presented in round 2 go first.
           const presented = round2Presented_(document.state);
-          const fresh = room.entrants.filter(no => !presented.has(no));
-          const pool = fresh.length ? fresh : room.entrants;
+          const fresh = remaining.filter(no => !presented.has(no));
+          const pool = fresh.length ? fresh : remaining;
           const no = pool[Math.floor(Math.random() * pool.length)];
           const student = document.state.students.find(p => p.no === no);
-          room.winner = {no:no,name:student.name,fresh:fresh.length > 0,pool:pool.length};
+          room.drawn = drawn.concat(no);
+          const round = room.drawn.length === 1 ? room.id : room.id + ':' + room.drawn.length;
+          room.winner = {no:no,name:student.name,fresh:fresh.length > 0,pool:pool.length,round:round};
           room.drawnAt = new Date().toISOString();
-          document.state.bonus.push({round:room.id,no:no,entrants:room.entrants.slice(),drawnAt:room.drawnAt,stage:2,source:'volunteer',question:question,date:date});
+          document.state.bonus.push({round:round,no:no,entrants:room.entrants.slice(),drawnAt:room.drawnAt,stage:2,source:'volunteer',question:question,date:date});
           document.revision++;
           roomReceipt = room;
         }
       }
-      if (action !== 'bonusDraw') roomReceipt = room;
+      if (action !== 'bonusDraw' && action !== 'bonusRedraw') roomReceipt = room;
     }
     document.requests.push({id:requestId,fingerprint:fingerprint,room:roomReceipt || null});
     document.requests = document.requests.slice(-30);
-    const reportsWarning = write_(document, ['initialize','save','attendanceSave','bonusDraw','round2Lottery'].includes(action));
+    const reportsWarning = write_(document, ['initialize','save','attendanceSave','bonusDraw','bonusRedraw','round2Lottery'].includes(action));
     const result = result_(document, action, roomReceipt);
     if (reportsWarning) result.reportsWarning=reportsWarning;
     return result;
@@ -320,7 +412,7 @@ function exchangeLogin_(payload) {
     let grant;
     try {grant=JSON.parse(cache.get(key) || 'null');} catch (error) {invalid();}
     const now = Date.now();
-    if (!grant || grant.email !== ADMIN_EMAIL_ || grant.state !== payload.state || !Number.isFinite(grant.expiresAt) || grant.expiresAt <= now) invalid();
+    if (!grant || grant.email !== OWNER_EMAIL_ || grant.state !== payload.state || !Number.isFinite(grant.expiresAt) || grant.expiresAt <= now) invalid();
     // Bind each grant to one session. Repeating the exact exchange recovers its
     // receipt during the original five-minute grant window without extending it.
     if (!grant.token) {
@@ -329,8 +421,8 @@ function exchangeLogin_(payload) {
       cache.put(key, JSON.stringify(grant), Math.max(1, Math.ceil((grant.expiresAt-now)/1000)));
     }
     if (!/^[a-f0-9]{64}$/.test(grant.token) || !Number.isFinite(grant.sessionExpiresAt) || grant.sessionExpiresAt <= now) invalid();
-    cache.put(loginCacheKey_('session', grant.token), JSON.stringify({email:ADMIN_EMAIL_,expiresAt:grant.sessionExpiresAt}), Math.max(1, Math.ceil((grant.sessionExpiresAt-now)/1000)));
-    return {token:grant.token,expiresAt:grant.sessionExpiresAt,email:ADMIN_EMAIL_};
+    cache.put(loginCacheKey_('session', grant.token), JSON.stringify({email:OWNER_EMAIL_,groups:'*',expiresAt:grant.sessionExpiresAt}), Math.max(1, Math.ceil((grant.sessionExpiresAt-now)/1000)));
+    return {token:grant.token,expiresAt:grant.sessionExpiresAt,email:OWNER_EMAIL_};
   });
 }
 function authenticateSession_(sessionToken) {
@@ -338,8 +430,32 @@ function authenticateSession_(sessionToken) {
   if (typeof sessionToken !== 'string' || !/^[a-f0-9]{64}$/.test(sessionToken)) denied();
   let session;
   try {session=JSON.parse(CacheService.getScriptCache().get(loginCacheKey_('session', sessionToken)) || 'null');} catch (error) {denied();}
-  if (!session || session.email !== ADMIN_EMAIL_ || !Number.isFinite(session.expiresAt) || session.expiresAt <= Date.now()) denied();
-  return session.email;
+  if (!session || typeof session.email !== 'string' || !Number.isFinite(session.expiresAt) || session.expiresAt <= Date.now()) denied();
+  // Sessions from the original owner-only sign-in carry no group list.
+  const groups = session.email === OWNER_EMAIL_ ? '*' : session.groups;
+  if (groups !== '*' && !Array.isArray(groups)) denied();
+  return {email:session.email,groups:groups};
+}
+// "Sign in with Google" on the site sends a Google ID token. Google verifies
+// its signature; the token must be for this site's client ID and a verified
+// email that the Groups tab assigns to at least one group.
+function googleLogin_(payload) {
+  const invalid = message => {throw Error(message || 'Google sign-in failed. Sign in again.');};
+  if (!OAUTH_CLIENT_ID_) invalid('Google sign-in is not configured yet.');
+  if (Object.keys(payload).length !== 1 || typeof payload.credential !== 'string' || payload.credential.length > 4096 || !/^[\w-]+\.[\w-]+\.[\w-]+$/.test(payload.credential)) invalid();
+  const response = UrlFetchApp.fetch('https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(payload.credential), {muteHttpExceptions:true});
+  if (response.getResponseCode() !== 200) invalid();
+  const claims = JSON.parse(response.getContentText());
+  const email = String(claims.email || '').toLowerCase();
+  if (claims.aud !== OAUTH_CLIENT_ID_ || !['accounts.google.com','https://accounts.google.com'].includes(claims.iss) ||
+      String(claims.email_verified) !== 'true' || !(Number(claims.exp) * 1000 > Date.now()) || !email) invalid();
+  if (email === OWNER_EMAIL_) ensureGroupsSheet_();
+  GROUPS_ = null;
+  const groups = email === OWNER_EMAIL_ ? '*' : Object.keys(groupsConfig_()).filter(id => groupsConfig_()[id].admins.includes(email));
+  if (groups !== '*' && !groups.length) invalid('This Google account (' + email + ') is not assigned to a tutorial group. Ask the course owner to add it.');
+  const token = loginSecret_(), expiresAt = Date.now() + 7200000;
+  CacheService.getScriptCache().put(loginCacheKey_('session', token), JSON.stringify({email:email,groups:groups,expiresAt:expiresAt}), 7200);
+  return {token:token,expiresAt:expiresAt,email:email,groups:groupList_(groups)};
 }
 
 function publicRpc_(action, payload) {
@@ -350,17 +466,17 @@ function publicRpc_(action, payload) {
     // is serialized, so queued signups each hold the lock for milliseconds.
     const student = action === 'bonusJoin' ? sidStudent_(request.sid) : null;
     return locked_(function () {
+      if (action === 'bonusJoin') return join_(student, request.room);
       const store = bonusStore_();
       if (!store.meta || store.meta.id !== request.room) throw Error('This Bonus link has expired. Ask for the latest QR code.');
-      if (action === 'bonusInfo') return {id:store.meta.id,open:store.meta.open};
-      return join_(store, student);
+      return {id:store.meta.id,open:store.meta.open};
     }, action === 'bonusJoin' ? SIGNUP_WAIT_MS_ : 2000);
   } catch (error) {
     const expected = [
       'This Bonus link has expired. Ask for the latest QR code.',
       'Bonus registration is closed.',
       'This roster No. cannot join. Check with the instructor.',
-      'This SID is not on the Tutorial 3 list. Check it, or ask the instructor to add you.',
+      'This SID is not on the class list. Check it, or ask the instructor to add you.',
       'SID sign-up is not set up. Ask the instructor to add you.',
       'The cloud service is busy. Retry the same request.'
     ];
@@ -390,7 +506,7 @@ function authenticate_() {
     console.error('Administrator identity check failed: ' + (error && error.stack || String(error)));
     throw Error('Administrator access denied. Use the authorized Google account.');
   }
-  if (active !== ADMIN_EMAIL_ || effective !== ADMIN_EMAIL_) throw Error('Administrator access denied. Use the authorized Google account.');
+  if (active !== OWNER_EMAIL_ || effective !== OWNER_EMAIL_) throw Error('Administrator access denied. Use the authorized Google account.');
   return active;
 }
 function locked_(fn, waitMs) {
@@ -431,7 +547,7 @@ function write_(document, reports) {
 function result_(document, action, roomReceipt) {
   const metadata = ownerMetadata_(document);
   if (action === 'initialize' || action === 'save' || action === 'attendanceSave' || action === 'round2Lottery') return Object.assign({state:document.state,revision:document.revision}, metadata);
-  if (action === 'bonusDraw') return Object.assign({state:document.state,revision:document.revision,room:roomReceipt || document.room}, metadata);
+  if (action === 'bonusDraw' || action === 'bonusRedraw') return Object.assign({state:document.state,revision:document.revision,room:roomReceipt || document.room}, metadata);
   return Object.assign({room:roomReceipt || document.room}, metadata);
 }
 function requireRoom_(document, id) {
@@ -502,15 +618,23 @@ function syncBonus_(document, properties) {
   if (Object.keys(changed).length) properties.setProperties(changed);
   properties.setProperty(BONUS_META_, JSON.stringify(room ? {id:room.id,open:room.open,drawn:!!room.winner} : null));
 }
-function join_(store, student) {
-  const key = bonusSlotKey_(store.meta.id, student.no);
-  const value = store.properties.getProperty(key);
+function join_(student, room) {
+  // Normally one read and at most one write under the lock, so each queued
+  // signup holds it only for two short Properties calls. A pending journal
+  // sync or a missing journal takes the slower recovery path.
+  const properties = storageProperties_();
+  const values = properties.getProperties();
+  const recovering = values[BONUS_PENDING_] || !values[BONUS_META_];
+  const meta = recovering ? bonusStore_().meta : JSON.parse(values[BONUS_META_]);
+  if (!meta || meta.id !== room) throw Error('This Bonus link has expired. Ask for the latest QR code.');
+  const key = bonusSlotKey_(meta.id, student.no);
+  const value = recovering ? properties.getProperty(key) : values[key];
   const receipt = {status:'joined',no:student.no,name:student.name};
   // Recover accepted receipts after closure or a lost response, without a write.
   if (value === '1') return receipt;
-  if (!store.meta.open || store.meta.drawn) throw Error('Bonus registration is closed.');
+  if (!meta.open || meta.drawn) throw Error('Bonus registration is closed.');
   if (value !== '0') throw Error('This roster No. cannot join. Check with the instructor.');
-  store.properties.setProperty(key, '1');
+  properties.setProperty(key, '1');
   return receipt;
 }
 // Owner polling while registration is open. Reads only the journal, without the
@@ -549,7 +673,7 @@ function sidStudent_(sid) {
   if (!text) throw Error('SID sign-up is not set up. Ask the instructor to add you.');
   const index = JSON.parse(text);
   const entry = index.entries[sidHash_(index.salt, sid)];
-  if (!entry) throw Error('This SID is not on the Tutorial 3 list. Check it, or ask the instructor to add you.');
+  if (!entry) throw Error('This SID is not on the class list. Check it, or ask the instructor to add you.');
   return {no:entry[0],name:entry[1]};
 }
 // sidByNo: Map of roster No. to SID text. Stores only salted hashes and masked names.
@@ -592,7 +716,7 @@ function importSids() {
     return result;
   });
 }
-// Reads the Tutorial 3 rows of the teaching sheet once per execution: No.,
+// Reads this group's rows of the teaching sheet once per execution: No.,
 // SID, Name, and whether Question 1 / Question 2 are filled. Marks themselves
 // are never kept.
 let SOURCE_RECORDS_ = null;
@@ -600,8 +724,8 @@ function sourceRecords_() {
   if (SOURCE_RECORDS_) return SOURCE_RECORDS_;
   const sourceId = PropertiesService.getScriptProperties().getProperty('SOURCE_ID');
   if (!sourceId) throw Error('Set the SOURCE_ID script property to the teaching sheet.');
-  const sheet = SpreadsheetApp.openById(sourceId).getSheets().find(s => s.getSheetId() === SOURCE_GID_);
-  if (!sheet) throw Error('Tutorial 3 source worksheet was not found.');
+  const sheet = SpreadsheetApp.openById(sourceId).getSheets().find(s => s.getSheetId() === config_().sourceGid);
+  if (!sheet) throw Error('The teaching worksheet (SOURCE_GID) was not found.');
   const firstColumn = sheet.getRange(1,1,Math.min(10,sheet.getLastRow()),1).getDisplayValues();
   const headerRow = firstColumn.findIndex(row => row[0].trim() === 'No.');
   if (headerRow < 0) throw Error('The source roster headers were not found.');
@@ -617,7 +741,7 @@ function sourceRecords_() {
   const nos = read(['No.']), names = read(['Name']), classes = read(['TutorialClass']), q1 = read(['Question1']), q2 = read(['Question2']);
   const sids = read(['StudentID','SID','StudentNo.','學號','学号']);
   SOURCE_RECORDS_ = nos.map((no,i) => ({no:/^\d+$/.test(no) ? Number(no) : 0,sid:sids[i],name:names[i],q:[!!q1[i],!!q2[i]],className:classes[i]}))
-    .filter(p => p.no > 0 && p.className === 'Tutorial 3').map(p => ({no:p.no,sid:p.sid,name:p.name,q:p.q}));
+    .filter(p => p.no > 0 && p.className === config_().tutorialClass).map(p => ({no:p.no,sid:p.sid,name:p.name,q:p.q}));
   return SOURCE_RECORDS_;
 }
 function sourceSids_() {
@@ -627,8 +751,8 @@ function sourceSids_() {
 function sourceRoster_() {
   const sourceId = PropertiesService.getScriptProperties().getProperty('SOURCE_ID');
   if (!sourceId || !/^[A-Za-z0-9_-]{10,200}$/.test(sourceId)) throw Error('Set the SOURCE_ID script property before creating the roster snapshot.');
-  const sheet = SpreadsheetApp.openById(sourceId).getSheets().find(s => s.getSheetId() === SOURCE_GID_);
-  if (!sheet) throw Error('Tutorial 3 source worksheet was not found.');
+  const sheet = SpreadsheetApp.openById(sourceId).getSheets().find(s => s.getSheetId() === config_().sourceGid);
+  if (!sheet) throw Error('The teaching worksheet (SOURCE_GID) was not found.');
   // Header cells only; the Student ID column is never read below the header.
   const firstColumn = sheet.getRange(1,1,Math.min(10,sheet.getLastRow()),1).getDisplayValues();
   const headerRow = firstColumn.findIndex(row => row[0].trim() === 'No.');
@@ -652,7 +776,7 @@ function sourceRoster_() {
   };
   const q1 = read('Question1').map(completed), q2 = read('Question2').map(completed);
   const roster = nos.map((v,i) => ({no:/^\d+$/.test(v.trim()) ? Number(v) : null,name:names[i].trim(),q:[q1[i],q2[i]],className:classes[i].trim()}))
-    .filter(p => p.no > 0 && p.className === 'Tutorial 3').map(p => ({no:p.no,name:p.name,q:p.q})).sort((a,b) => a.no-b.no);
+    .filter(p => p.no > 0 && p.className === config_().tutorialClass).map(p => ({no:p.no,name:p.name,q:p.q})).sort((a,b) => a.no-b.no);
   return validateRoster_(roster);
 }
 function roster_() {
@@ -665,7 +789,7 @@ function roster_() {
   return validateRoster_(rows.slice(1).map(row => ({no:row[0],name:row[1],q:[row[2],row[3]]}))).sort((a,b) => a.no-b.no);
 }
 function validateRoster_(roster) {
-  if (!roster.length || roster.length > 500 || roster.some(p => !Number.isSafeInteger(p.no) || p.no < 1) || new Set(roster.map(p => p.no)).size !== roster.length) throw Error('The Tutorial 3 roster has invalid or duplicate numbers.');
+  if (!roster.length || roster.length > 500 || roster.some(p => !Number.isSafeInteger(p.no) || p.no < 1) || new Set(roster.map(p => p.no)).size !== roster.length) throw Error('The roster has invalid or duplicate numbers.');
   if (roster.some(p => typeof p.name !== 'string' || !p.name.trim() || p.name.length > 200 || !Array.isArray(p.q) || p.q.length !== 2 || p.q.some(q => typeof q !== 'boolean'))) throw Error('The private roster requires names up to 200 characters and boolean participation flags.');
   return roster;
 }
@@ -687,7 +811,7 @@ function numbers_(values, known, empty) {
   return values.slice();
 }
 function cleanState_(input, roster) {
-  if (!input || input.version !== 2 || !Array.isArray(input.students) || input.students.length !== roster.length) throw Error('The cloud state must match the Tutorial 3 roster.');
+  if (!input || input.version !== 2 || !Array.isArray(input.students) || input.students.length !== roster.length) throw Error('The cloud state must match the roster.');
   const known = new Set(roster.map(p => p.no)), names = new Map(roster.map(p => [p.no,p.name]));
   const students = input.students.map(p => {
     if (!p || !known.has(p.no) || !Array.isArray(p.q) || p.q.length !== 2 || p.q.some(q => typeof q !== 'boolean') || (p.q[1] && !p.q[0])) throw Error('Invalid participation progress.');
@@ -1064,7 +1188,7 @@ function reports_(book, document) {
     const draws = bonus.get(p.no) || [];
     return [p.no,answer.sid,p.name,answer.q[0] ? '已讲' : '未讲',answer.q[1] ? '已录分' : '',draws.length,draws.join('；'),presented.has(p.no) ? '已讲' : '未讲'];
   });
-  const sheet = reportSheet_(book, '学生名单', 'Tutorial 3 · 学生名单',
+  const sheet = reportSheet_(book, '学生名单', config_().tutorialClass + ' · 学生名单',
     '第一轮/第二轮（答题表）来自答题表 Question 1 / Question 2 是否有分数。网站抽中记录为第二轮 Bonus 的抽中日期、题号和方式。第二轮状态：答题表已录分或网站已抽中即为已讲。本表由网站生成，改动会被覆盖。',
     ['No.','SID','Name','第一轮（Question 1）','第二轮（Question 2）','网站抽中次数','网站抽中记录','第二轮状态'], rows);
   sheet.setFrozenColumns(3);

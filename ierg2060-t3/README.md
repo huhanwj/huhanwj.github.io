@@ -12,7 +12,19 @@ Round 1 is finished, and round 2 is entirely voluntary Bonus; the site no longer
 2. Click **Open volunteer sign-up**. A large QR code appears. Students enter their **SID**; the server maps it to their roster No. and the phone confirms with the No. and a masked name (for example `C*** T** M**`). The instructor page lists volunteers live, marked *first time* or *presented before*. **Add by roster No.** covers anyone whose phone fails; × removes an entry.
 3. Click **Close & draw a volunteer**. The server draws one volunteer, choosing among those who have **not presented in round 2** whenever there are any, and otherwise among all volunteers. The result is saved before it is shown, and retrying returns the same student.
 4. If nobody volunteered, click **Lottery (no volunteers)**. It previews a random student who has not presented in round 2. **Not here · draw again** skips that student for this question only; they keep their priority. **Confirm** saves the lottery result. Once every remaining student who has not presented is skipped, the lottery falls back to everyone else.
-5. Use the timer, then **Next question**.
+5. **Next question** moves on. To give the same question to someone else, use **Another volunteer** (draws again from the same sign-up, skipping anyone already drawn) or **Lottery**. Every student who presents keeps their record.
+
+**Question set** shows the question being asked next to the QR code and the selected student. Question sets live in `questions/`; each question is one image cropped from the student (question-only) PDF by `tools/question_images.py`, for example:
+
+```
+python3 tools/question_images.py ~/Documents/lec_prepare/tutorial7/Tutorial_7_Questions.pdf questions/tutorial7 "Tutorial 7"
+```
+
+Never add the TA version. The repository is public; only question handouts belong here.
+
+### Tutorial groups
+
+One backend serves every group. The **Groups** tab in the Tutorial 3 storage spreadsheet has one row per group: Group ID (lowercase, for example `t1`), Label, Tutorial Class, the answer-sheet tab's gid, and TA Gmail addresses. The owner can open every group; a TA sees only their own. The page for a group is `?group=<id>` (Tutorial 3 needs none), and its QR codes carry the same group. A group's private storage, roster and SID index are created on its first sign-in from its answer-sheet tab. "Sign in with Google" for TAs needs an OAuth Web client ID in `cloud-config.js` and `Code.gs`; until then the original owner-only sign-in window remains.
 
 The **teaching sheet** (the original Tutorial 3 sheet) is the record of who has answered. A student has presented in round 2 when their **Question 2** cell is filled there, or when this site has drawn them for a round 2 Bonus (the mark may not be entered yet). The backend re-reads Question 2 on sign-in, before every draw and lottery, and via Settings → **Re-read answer sheet**. It never writes to the teaching sheet and never reads its SID cells for this. If the sheet cannot be read, the page shows a warning and uses the last synchronized list. **Round 2 record** lists the selected date's records and the roster numbers who have not presented yet. **Cancel sign-up** discards an open sign-up without drawing.
 
@@ -23,7 +35,7 @@ Every change sends a stable `requestId`. If Google does not confirm, the page ke
 Earlier, each signup waited at most 2 s for the shared script lock, while the instructor page's status poll held that lock to read the spreadsheet every 5 s. A burst of 20 phones therefore produced *busy* replies. Now:
 
 - The SID lookup reads one Script Property and takes no lock.
-- The lock covers only one property read and one property write per signup. Signups wait up to 20 s in that queue instead of failing after 2 s.
+- The lock covers one `getProperties` read and one property write per signup. Signups wait up to 20 s in that queue instead of failing after 2 s.
 - The instructor page polls the volunteer list every 2 s with `bonusLive`, which reads Script Properties without the lock or the spreadsheet.
 - The phone retries the same request up to 4 times with jittered backoff; duplicates count once.
 

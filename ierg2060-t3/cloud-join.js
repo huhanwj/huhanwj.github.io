@@ -1,5 +1,5 @@
-import {createCloudClient} from './cloud.js?v=10';
-import {cloudDefaults, testMode, browserStateKey} from './cloud-config.js?v=8';
+import {createCloudClient} from './cloud.js?v=11';
+import {cloudDefaults, groupId, testMode, browserStateKey} from './cloud-config.js?v=9';
 
 document.getElementById('test-banner').hidden = !testMode;
 if (testMode) document.title = 'TEST · Bonus registration';
@@ -56,7 +56,7 @@ const params = new URLSearchParams(location.hash.slice(1));
   function connect() {
     client?.destroy();
     client = null;
-    client = createCloudClient(endpoint, {testMode});
+    client = createCloudClient(endpoint, {testMode, group: groupId});
     if (harness) client.ready().then(() => {
       if (!suspended) report('ready', {phase:'bridge'});
     }).catch(error => {if (!suspended) report('error', {pending:!!attempt,message:error.message});});

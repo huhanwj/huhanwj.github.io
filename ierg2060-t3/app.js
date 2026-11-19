@@ -1,21 +1,26 @@
 import {validateState, round2Presented, lotteryPool, pick, validDate} from './core.js?v=11';
-import {createCloudClient} from './cloud.js?v=10';
-import {readSession, beginSignIn, cancelSignIn, clearSession} from './auth.js?v=2';
-import {cloudDefaults, testMode, browserStateKey} from './cloud-config.js?v=8';
+import {createCloudClient} from './cloud.js?v=11';
+import {readSession, beginSignIn, cancelSignIn, clearSession, saveSession, renderGoogleButton} from './auth.js?v=3';
+import {cloudDefaults, groupId, googleClientId, testMode, browserStateKey, pageQuery} from './cloud-config.js?v=9';
 
 // Round 2 is voluntary Bonus: volunteers sign up by SID, the server draws one
 // (preferring students who have not presented in round 2), and a lottery among
 // those students covers questions nobody volunteers for. No attendance is taken.
-const [PENDING,CURRENT,TIMER,MINUTES,CLASS_DATE,DISMISSED,TAB_LOCK]=['ierg2060-t3-r2-pending','ierg2060-t3-r2-current','ierg2060-t3-r2-timer','ierg2060-t3-minutes','ierg2060-t3-class-date','ierg2060-t3-r2-dismissed','ierg2060-t3-v1'].map(browserStateKey);
+const [PENDING,CURRENT,CLASS_DATE,DISMISSED,QUESTION_SET,TAB_LOCK]=['ierg2060-t3-r2-pending','ierg2060-t3-r2-current','ierg2060-t3-class-date','ierg2060-t3-r2-dismissed','ierg2060-question-set','ierg2060-t3-v1'].map(browserStateKey);
 const $=id=>document.getElementById(id);
-$('test-banner').hidden=!testMode;
-$('environment-status').textContent=testMode?'Test mode · Google Sheets test dataset · 35 fictional students':'Live mode · class Google Sheets';
+$('test-badge').hidden=!testMode;
 $('mode-switch').textContent=testMode?'Switch to Live':'Switch to Test';
-if(testMode)document.title='TEST · IERG2060 · Tutorial 3';
+// The group's label comes from the backend after sign-in.
+function showGroup(label){
+  $('brand-group').textContent=label;
+  document.title=`${testMode?'TEST · ':''}IERG2060 · ${label}`;
+  $('environment-status').textContent=`${label} · ${testMode?'Test dataset · 35 fictional students':'Live class data'}`;
+}
+showGroup(groupId==='t3'?'Tutorial 3':groupId);
 
 let cloud=null,connected=false,connecting=false,signingIn=false,busy=false,writable=false,revealing=false;
-let state=null,revision=-1,room=null,pending=null,current=null,preview=null,timer=null,questionText=null,pollTimer=null,polling=false,tickTimer=null,recordsWarning='';
-let sessionDate=today(),dismissed=null,shownCard='';
+let state=null,revision=-1,room=null,pending=null,current=null,preview=null,questionText=null,pollTimer=null,polling=false,recordsWarning='';
+let sessionDate=today(),dismissed=null,shownCard='',questionSets=[],questionSet='';
 
 function today(){const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());return ['year','month','day'].map(key=>parts.find(p=>p.type===key).value).join('-');}
 function load(key){try{return JSON.parse(localStorage.getItem(key)||'null');}catch{return null;}}
@@ -38,7 +43,10 @@ function applyResult(result){
   if(recordsWarning)notice(recordsWarning,true);
 }
 function expireSession(error){
-  if(error.serverConfirmed&&/Your sign-in session expired/.test(error.message)){clearSession();connected=false;$('cloud-account').textContent='Sign in again to continue.';}
+  if(error.serverConfirmed&&/Your sign-in session expired/.test(error.message)){
+    clearSession();connected=false;$('cloud-account').textContent='Sign in again to continue.';
+    if(googleClientId)renderGoogleButton($('google-button'),googleClientId,googleCredential).catch(()=>{});
+  }
 }
 async function call(action,payload={}){
   if(!cloud||!connected)throw Error('Sign in with Google to continue.');
@@ -62,7 +70,7 @@ async function flush(){
     throw error;
   }
   pending=null;store(PENDING,null);applyResult(result);
-  if(operation.action==='bonusDraw'&&result.room?.winner)setCurrent(result.room.id);
+  if(['bonusDraw','bonusRedraw'].includes(operation.action)&&result.room?.winner)setCurrent(result.room.winner.round||result.room.id);
   if(operation.action==='round2Lottery'){
     const {no,question,date}=operation.payload,record=round2Records().filter(b=>b.source==='lottery'&&b.no===no&&b.question===question&&b.date===date).at(-1);
     preview=null;if(record)setCurrent(record.round);
@@ -78,6 +86,25 @@ function phase(){
   // An empty closed sign-up is dismissed once the lottery covers its question.
   if(room&&!room.winner&&(room.entrants.length||room.id!==dismissed))return 'closed';
   return 'idle';
+}
+
+// ---- Question sets: one cropped image per question, from questions/ ----
+async function loadQuestionSets(){
+  try{
+    const response=await fetch('questions/index.json',{cache:'no-cache'});
+    if(!response.ok)return;
+    const sets=await response.json();
+    questionSets=Array.isArray(sets)?sets.filter(s=>typeof s?.id==='string'&&typeof s.title==='string'&&Array.isArray(s.questions)):[];
+  }catch{questionSets=[];}
+  $('question-set').replaceChildren(new Option('None',''),...questionSets.map(s=>new Option(s.title,s.id)));
+  const saved=load(QUESTION_SET);
+  questionSet=questionSets.some(s=>s.id===saved)?saved:'';
+  $('question-set').value=questionSet;
+  render();
+}
+function questionImage(number){
+  const entry=questionSets.find(s=>s.id===questionSet)?.questions.find(q=>q.number===number);
+  return entry&&/^[\w-]+\/[\w-]+\.png$/.test(entry.image)?`questions/${entry.image}`:null;
 }
 
 // ---- Polling: lock-free journal reads while sign-up is open ----
@@ -100,51 +127,58 @@ document.addEventListener('visibilitychange',()=>{if(!document.hidden)poll();});
 // ---- Rendering ----
 function renderQr(){
   const url=new URL('join.html',new URL('./',location.href));
-  if(testMode)url.searchParams.set('mode','test');
+  url.search=pageQuery().toString();
   url.hash=new URLSearchParams({room:room.id}).toString();
   if($('signup-link').href===url.href)return;
   $('signup-link').href=url.href;
-  if(typeof globalThis.qrcode==='function'){const qr=globalThis.qrcode(0,'M');qr.addData(url.href);qr.make();$('signup-qr').innerHTML=qr.createSvgTag({scalable:true,margin:4});}
+  if(typeof globalThis.qrcode==='function'){const qr=globalThis.qrcode(0,'M');qr.addData(url.href);qr.make();$('signup-qr').innerHTML=qr.createSvgTag({scalable:true,margin:2});}
   else $('signup-qr').textContent='QR code unavailable. Open the sign-up link.';
 }
 function renderVolunteers(show){
   $('volunteers').hidden=!show;
   if(!show)return;
-  const presented=round2Presented(state);
+  const presented=round2Presented(state),drawn=room.drawn||[];
   $('volunteer-list').replaceChildren(...[...room.entrants].sort((a,b)=>a-b).map(no=>{
-    const item=document.createElement('li'),label=document.createElement('span'),tag=document.createElement('small'),remove=document.createElement('button');
-    label.textContent=`No. ${no} ${studentName(no)}`;
+    const item=document.createElement('li'),label=document.createElement('span'),remove=document.createElement('button');
+    label.textContent=`${no} · ${studentName(no)}${drawn.includes(no)?' (drawn)':''}`;
     item.className=presented.has(no)?'repeat':'fresh';
-    tag.textContent=presented.has(no)?'presented before':'first time';
+    item.title=presented.has(no)?'Presented in round 2 before':'First round 2 presentation';
     remove.type='button';remove.className='remove';remove.textContent='×';remove.setAttribute('aria-label',`Remove No. ${no}`);
-    remove.disabled=busy||!!pending;remove.onclick=handle(()=>exclusive(()=>mutate('bonusRemove',{room:room.id,no})));
-    item.append(label,tag,remove);return item;
+    remove.disabled=busy||!!pending;remove.hidden=!!room.winner;remove.onclick=handle(()=>exclusive(()=>mutate('bonusRemove',{room:room.id,no})));
+    item.append(label,remove);return item;
   }));
+  $('manual-form').hidden=!!room.winner;
   $('manual-no').disabled=$('manual-form').querySelector('button').disabled=busy||!!pending;
 }
 function renderCard(no,label){
   // Rebuild only when the card changes, so re-renders do not replay the reveal.
   const key=`${revealing}|${no}|${label}`;if(key===shownCard)return;shownCard=key;
   const results=$('results');results.replaceChildren();
-  if(revealing){const card=document.createElement('div');card.className='card-back shuffling';card.setAttribute('aria-hidden','true');const emblem=document.createElement('span');emblem.textContent='?';card.append(emblem);results.append(card);return;}
-  const list=document.createElement('ol'),item=document.createElement('li'),q=document.createElement('span'),n=document.createElement('strong'),name=document.createElement('span');
-  list.className='draw-results single-result';q.className='result-q';q.textContent=label;n.className='result-no';n.textContent=String(no).padStart(2,'0');name.className='result-name';name.textContent=studentName(no);
-  item.append(q,n,name);list.append(item);results.append(list);
+  if(revealing){const back=document.createElement('div');back.className='card-back shuffling';back.setAttribute('aria-hidden','true');back.textContent='?';results.append(back);return;}
+  const face=document.createElement('div'),small=document.createElement('small'),strong=document.createElement('strong');
+  face.className='card-face';small.textContent=label;strong.textContent=String(no).padStart(2,'0');
+  face.append(small,strong);results.append(face);
 }
-function timerTick(){
-  const active=timer&&timer.round===current?.round?timer:null;
-  const minutes=Number($('answer-minutes').value)||0;
-  const remaining=active?.deadline?Math.max(0,Math.ceil((active.deadline-Date.now())/1000)):minutes*60;
-  $('answer-clock').textContent=`${String(Math.floor(remaining/60)).padStart(2,'0')}:${String(remaining%60).padStart(2,'0')}`;
-  const expired=!!active?.deadline&&remaining===0;
-  $('answer-clock').classList.toggle('expired',expired);
-  $('timer-status').textContent=active?.deadline?(expired?'Time is up.':'Answer in progress.'):'Ready to start.';
-  if(!active?.deadline||expired){clearInterval(tickTimer);tickTimer=null;}
+function renderQuestion(p,number){
+  const src=p==='none'||p==='closed'?null:questionImage(number);
+  $('question-figure').hidden=!src;
+  // The one figure moves into the current phase's slot.
+  const slot=document.querySelector(`#phase-${p} .question-slot`);
+  if(src&&slot&&$('question-figure').parentElement!==slot)slot.append($('question-figure'));
+  document.querySelector('.presenter').classList.toggle('has-question',!!src&&p==='result');
+  if(!src)return;
+  $('question-caption').textContent=`${questionSets.find(s=>s.id===questionSet).title} · Question ${number}`;
+  if($('question-image').getAttribute('src')!==src){$('question-image').src=src;$('question-image').alt=`Question ${number}`;}
 }
 function render(){
   schedulePoll();
   const p=phase(),locked=busy||connecting||revealing||!!pending||!connected;
+  document.body.classList.toggle('wide',p==='open'||p==='result');
   $('connection-panel').hidden=connected&&!!state;
+  // With a configured client ID everyone uses Google's button; otherwise the
+  // owner-only sign-in window remains.
+  $('connect-main').hidden=!!googleClientId&&!readSession();
+  $('google-button').hidden=!googleClientId||!!readSession()||connecting;
   $('connect-main').disabled=busy||connecting||!writable;
   $('connect-main').textContent=signingIn?'Waiting for Google…':connecting?'Connecting…':readSession()?'Reconnect':'Sign in with Google';
   $('sign-in-cancel').hidden=!signingIn;
@@ -153,44 +187,52 @@ function render(){
   $('cloud-refresh').hidden=$('records-refresh').hidden=!connected;
   $('cloud-refresh').disabled=$('records-refresh').disabled=locked;
   $('backup').disabled=!state;
-  $('draw-table').hidden=!state;
+  $('stage').hidden=!state;
   for(const name of ['idle','open','closed','result'])$(`phase-${name}`).hidden=p!==name;
   if(!state)return;
 
   const presented=round2Presented(state),remaining=state.students.length-presented.size;
-  $('r2-progress').textContent=`${remaining} of ${state.students.length} have not presented in round 2`;
+  $('r2-progress').textContent=`${remaining} / ${state.students.length} not yet presented`;
   const record=currentRecord();
   $('question').value=record?record.question:preview?preview.question:(questionText??nextQuestion());
+  const number=Number($('question').value);
+  document.querySelectorAll('.question-ref').forEach(span=>{span.textContent=`Question ${number}`;});
   $('session-date').value=sessionDate;
   $('question').disabled=$('session-date').disabled=locked||p==='result'||p==='open';
-  $('deck-caption').textContent=p==='open'?'Sign-up open':p==='closed'?'Sign-up closed':p==='result'?(preview?'Lottery preview · not saved yet':'Saved'):'';
+  $('question-set').disabled=revealing;
+  renderQuestion(p,number);
 
   $('open-signup').disabled=$('lottery-start').disabled=locked;
   if(p==='open'){renderQr();$('signup-count').textContent=String(room.entrants.length);}
   $('close-draw').disabled=$('cancel-signup').disabled=locked;
   if(p==='closed'){
     const count=room.entrants.length;
-    $('closed-lead').textContent=count?`Sign-up closed with ${count} volunteer${count===1?'':'s'}.`:'Nobody volunteered for this question. Run the lottery among students who have not presented in round 2.';
+    $('closed-lead').textContent=count?`${count} volunteer${count===1?'':'s'} signed up.`:'Nobody volunteered. Run the lottery among students who have not presented.';
     $('draw-volunteer').hidden=!count;$('lottery-fallback').hidden=!!count;
     $('draw-volunteer').disabled=$('lottery-fallback').disabled=$('reopen-signup').disabled=locked;
   }
-  renderVolunteers((p==='open'||p==='closed')&&!!room);
+  // Volunteers stay visible after a draw, so the class sees who signed up.
+  const roomShown=room&&(p==='open'||p==='closed'||(p==='result'&&record?.source==='volunteer'&&record.round.startsWith(room.id)));
+  renderVolunteers(!!roomShown);
 
   if(p==='result'){
-    $('lottery-actions').hidden=!preview;$('answer-panel').hidden=!!preview;
+    $('lottery-actions').hidden=!preview;$('result-actions').hidden=!!preview;
     $('lottery-confirm').disabled=$('lottery-skip').disabled=$('lottery-cancel').disabled=locked;
+    const no=preview?preview.no:record.no;
+    $('result-name').textContent=revealing?'Drawing…':studentName(no);
     if(preview){
-      renderCard(preview.no,`QUESTION ${preview.question} · LOTTERY`);
-      $('result-detail').textContent=revealing?'':`${presented.has(preview.no)?'Has presented in round 2 before.':'First round 2 presentation.'} Confirm if the student is here${preview.skipped.length?` · skipped: ${preview.skipped.map(no=>`No. ${no}`).join(', ')}`:''}.`;
+      renderCard(no,'LOTTERY');
+      $('result-source').textContent=`Question ${preview.question} · Lottery preview`;
+      $('result-detail').textContent=revealing?'':`${presented.has(no)?'Has presented in round 2 before.':'First round 2 presentation.'} Confirm if the student is here.${preview.skipped.length?` Skipped: ${preview.skipped.join(', ')}.`:''}`;
     }else{
-      const index=state.bonus.indexOf(record),before=state.bonus.slice(0,index).some(b=>b.stage===2&&b.no===record.no)||state.r2Source.includes(record.no);
-      renderCard(record.no,`QUESTION ${record.question} · ${record.source==='volunteer'?'VOLUNTEER':'LOTTERY'}`);
-      $('result-detail').textContent=record.source==='volunteer'?`Drawn from ${record.entrants.length} volunteer${record.entrants.length===1?'':'s'} · ${before?'had presented in round 2 before':'first round 2 presentation'}.`:`Lottery · ${before?'had presented in round 2 before':'first round 2 presentation'}.`;
-      const active=timer?.round===record.round?timer:null;
-      $('answer-minutes').disabled=!!active?.deadline;
-      $('timer-start').disabled=!!active?.deadline;$('timer-start').textContent=active?.deadline?'Started':'Start';
-      $('next-question').disabled=locked;
-      timerTick();
+      const index=state.bonus.indexOf(record),before=state.bonus.slice(0,index).some(b=>b.stage===2&&b.no===no)||state.r2Source.includes(no);
+      renderCard(no,record.source==='volunteer'?'VOLUNTEER':'LOTTERY');
+      $('result-source').textContent=`Question ${record.question} · ${record.source==='volunteer'?`Volunteer · drawn from ${record.entrants.length}`:'Lottery'}`;
+      $('result-detail').textContent=before?'Has presented in round 2 before.':'First round 2 presentation.';
+      const left=room&&record.source==='volunteer'&&record.round.startsWith(room.id)?room.entrants.filter(n=>!(room.drawn||[room.winner?.no]).includes(n)).length:0;
+      $('redraw-volunteer').hidden=!left;
+      $('redraw-volunteer').textContent=`Another volunteer (${left} left)`;
+      $('next-question').disabled=$('redraw-volunteer').disabled=$('redo-lottery').disabled=locked;
     }
   }
   $('pending-panel').hidden=!pending||busy;
@@ -234,8 +276,8 @@ async function reveal(){
   finally{revealing=false;}
   if(preview)$('announcement').textContent=`Question ${preview.question}: No. ${preview.no} ${studentName(preview.no)}`;
 }
-async function startLottery(){
-  const question=questionNumber();classDate();
+async function startLottery(question=questionNumber()){
+  classDate();
   if(room&&!room.open&&!room.winner&&!room.entrants.length){dismissed=room.id;store(DISMISSED,dismissed);}
   const pool=lotteryPool(state);
   if(!pool.length)throw Error('No students are available for the lottery.');
@@ -245,7 +287,7 @@ async function startLottery(){
   if(fresh){applyResult(fresh);if(recordsWarning)notice(recordsWarning,true);}
   if(preview&&round2Presented(state).has(preview.no)&&lotteryPool(state).length){preview={...preview,no:pick(lotteryPool(state))};shownCard='';}
 }
-$('lottery-start').onclick=handle(()=>exclusive(startLottery));
+$('lottery-start').onclick=handle(()=>exclusive(()=>startLottery()));
 $('lottery-fallback').onclick=$('lottery-start').onclick;
 $('lottery-skip').onclick=handle(()=>exclusive(async()=>{
   if(!preview)return;
@@ -258,16 +300,20 @@ $('lottery-confirm').onclick=handle(()=>exclusive(async()=>{
   if(!preview)return;
   await mutate('round2Lottery',{no:preview.no,question:preview.question,date:classDate(),skipped:preview.skipped});
 }));
-$('timer-start').onclick=handle(()=>{
-  const minutes=Number($('answer-minutes').value);
-  if(!Number.isInteger(minutes)||minutes<1||minutes>180)throw Error('Enter a whole number of minutes from 1 to 180.');
-  if(!current)return;
-  timer={round:current.round,minutes,deadline:Date.now()+minutes*60000};store(TIMER,timer);store(MINUTES,minutes);
-  clearInterval(tickTimer);tickTimer=setInterval(timerTick,250);
-});
-$('next-question').onclick=handle(()=>{current=null;timer=null;store(CURRENT,null);store(TIMER,null);questionText=null;notice('');});
-$('answer-minutes').oninput=timerTick;
-$('question').oninput=()=>{questionText=$('question').value;};
+// The same question can go to another student: another volunteer from the
+// same sign-up, or a lottery. Both keep the first student's record.
+$('redraw-volunteer').onclick=handle(()=>exclusive(async()=>{
+  const record=currentRecord();if(!record||!room)return;
+  await mutate('bonusRedraw',{room:room.id,question:record.question,date:record.date});
+}));
+$('redo-lottery').onclick=handle(()=>exclusive(async()=>{
+  const record=currentRecord();if(!record)return;
+  current=null;store(CURRENT,null);
+  await startLottery(record.question);
+}));
+$('next-question').onclick=handle(()=>{current=null;store(CURRENT,null);questionText=null;notice('');});
+$('question').oninput=()=>{questionText=$('question').value;render();};
+$('question-set').onchange=()=>{questionSet=$('question-set').value;store(QUESTION_SET,questionSet||null);render();};
 $('session-date').onchange=handle(()=>{
   const date=$('session-date').value;if(!validDate(date))throw Error('Choose a valid class date.');
   sessionDate=date;store(CLASS_DATE,date);questionText=null;
@@ -278,7 +324,7 @@ $('cloud-refresh').onclick=handle(()=>exclusive(async()=>{applyResult(await call
 $('backup').onclick=handle(()=>{
   if(!state)return;
   const url=URL.createObjectURL(new Blob([JSON.stringify(state,null,2)],{type:'application/json'})),a=document.createElement('a');
-  a.href=url;a.download=`IERG2060-T3-${today()}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  a.href=url;a.download=`IERG2060-${groupId}-${today()}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 });
 $('settings-open').onclick=()=>{$('settings-status').textContent='';$('settings-dialog').showModal();};
 document.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>$(button.dataset.close).close());
@@ -290,12 +336,44 @@ $('mode-switch').onclick=handle(()=>{
 });
 
 // ---- Connection ----
+function bridge(){return createCloudClient(cloudDefaults.student,{testMode,group:groupId,getSessionToken:()=>readSession()?.token??null});}
+// A TA who opens another group's address moves to their own group.
+function ensureAllowedGroup(session){
+  if(!session?.groups||testMode||session.groups.some(g=>g.id===groupId))return true;
+  if(!session.groups.length)return true;
+  const url=new URL(location.href);url.search=pageQuery(session.groups[0].id).toString();location.replace(url.href);
+  return false;
+}
+function renderGroupSwitch(session){
+  const options=session?.groups||[];
+  $('group-switch').hidden=testMode||options.length<2;
+  document.querySelector('.brand').classList.toggle('switchable',!$('group-switch').hidden);
+  $('group-switch').replaceChildren(...options.map(g=>new Option(g.label,g.id)));
+  $('group-switch').value=groupId;
+  const own=options.find(g=>g.id===groupId);if(own)showGroup(own.label);
+}
+$('group-switch').onchange=()=>{
+  if(pending||preview||busy){$('group-switch').value=groupId;notice('Finish or confirm the current request before switching groups.',true);return;}
+  const url=new URL(location.href);url.search=pageQuery($('group-switch').value).toString();location.assign(url.href);
+};
+async function googleCredential(credential){
+  if(connecting)return;
+  connecting=true;render();
+  let client;
+  try{
+    client=bridge();
+    const session=saveSession(await client.call('googleLogin',{credential},{anonymous:true}));
+    if(!ensureAllowedGroup(session))return;
+  }catch(error){notice(error.message,true);return;}
+  finally{client?.destroy();connecting=false;render();}
+  await exclusive(()=>connectOwner()).catch(error=>notice(`Could not connect: ${error.message}`,true));
+}
 async function connectOwner(signIn=false){
   if(connecting)return;
   connecting=true;connected=false;cloud?.destroy();cloud=null;render();
   let proposed;
   try{
-    proposed=createCloudClient(cloudDefaults.student,{testMode,getSessionToken:()=>readSession()?.token??null});
+    proposed=bridge();
     if(signIn){
       signingIn=true;render();
       // Open synchronously in the button click, before the bridge is awaited.
@@ -310,11 +388,11 @@ async function connectOwner(signIn=false){
     if(!loaded.state)throw Error('Cloud progress is not initialized. Run setup in Apps Script first.');
     cloud=proposed;connected=true;
     $('cloud-account').textContent=`Google account: ${account.email}`;
+    renderGroupSwitch({groups:account.groups});
     applyResult(loaded);
     if(pending){try{await flush();}catch(error){notice(`Saved request still unconfirmed: ${error.message}`,true);}}
     applyResult(await call('bonusStatus'));
     if(current&&!currentRecord()){current=null;store(CURRENT,null);}
-    if(timer?.deadline&&timer.round===current?.round){clearInterval(tickTimer);tickTimer=setInterval(timerTick,250);}
   }catch(error){proposed?.destroy();cloud=null;connected=false;expireSession(error);throw error;}
   finally{signingIn=false;connecting=false;render();schedulePoll();}
 }
@@ -326,17 +404,18 @@ $('sign-in-cancel').onclick=()=>cancelSignIn();
 async function activate(){
   writable=true;
   const date=load(CLASS_DATE);if(validDate(date))sessionDate=date;
-  const minutes=Number(load(MINUTES));if(Number.isInteger(minutes)&&minutes>=1&&minutes<=180)$('answer-minutes').value=minutes;
   const saved=load(PENDING);if(saved&&typeof saved.action==='string'&&saved.payload&&typeof saved.payload.requestId==='string')pending=saved;
   const savedDismissed=load(DISMISSED);if(typeof savedDismissed==='string')dismissed=savedDismissed;
   const savedCurrent=load(CURRENT);if(typeof savedCurrent?.round==='string')current=savedCurrent;
-  const savedTimer=load(TIMER);if(typeof savedTimer?.round==='string'&&Number.isFinite(savedTimer.deadline))timer=savedTimer;
-  if(testMode&&!cloudDefaults.student)throw Error('The separate Google test connection is not deployed yet.');
-  if(readSession())await connectOwner();
-  else notice('Sign in with Google to load this class.');
+  const session=readSession();
+  if(session&&!ensureAllowedGroup(session))return;
+  if(googleClientId&&!session)renderGoogleButton($('google-button'),googleClientId,googleCredential).catch(error=>notice(error.message,true));
+  if(session)await connectOwner();
+  else notice('');
   render();
 }
 render();
+loadQuestionSets();
 if(navigator.locks)navigator.locks.request(TAB_LOCK,{ifAvailable:true},async lock=>{
   if(!lock){notice('Close the other draw page, then reload this one.',true);return;}
   try{await activate();}catch(error){notice(`Could not connect: ${error.message}`,true);render();}
@@ -344,4 +423,3 @@ if(navigator.locks)navigator.locks.request(TAB_LOCK,{ifAvailable:true},async loc
 }).catch(error=>notice(error.message,true));
 else notice('Use a current browser to run the draw.',true);
 window.addEventListener('beforeunload',event=>{if(pending||preview){event.preventDefault();event.returnValue='';}});
-window.addEventListener('pageshow',timerTick);
