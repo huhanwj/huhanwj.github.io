@@ -1,32 +1,57 @@
 <!doctype html>
 <html lang="en"><head>
-<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; frame-src 'self' https://script.google.com https://*.googleusercontent.com https://accounts.google.com; connect-src 'self' https://*.peerjs.com wss://*.peerjs.com; base-uri 'none'; form-action 'none'; object-src 'none'"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex,nofollow,noarchive"><meta name="referrer" content="no-referrer"><meta name="theme-color" content="#ffffff">
-<title>IERG2060 · Tutorial 3</title><link rel="stylesheet" href="style.css?v=14"><script defer src="vendor/peerjs.min.js"></script><script defer src="vendor/qrcode.js"></script><script type="module" src="app.js?v=23"></script>
+<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; frame-src 'self' https://script.google.com https://*.googleusercontent.com https://accounts.google.com; connect-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex,nofollow,noarchive"><meta name="referrer" content="no-referrer"><meta name="theme-color" content="#ffffff">
+<title>IERG2060 · Tutorial 3</title><link rel="stylesheet" href="style.css?v=15"><script defer src="vendor/qrcode.js"></script><script type="module" src="app.js?v=25"></script>
 </head><body>
 <div class="shell">
-<header><span class="site-title">IERG2060 · Tutorial group 3</span><div class="header-actions"><a id="records-link" class="pill" target="_blank" rel="noopener noreferrer" hidden>Records ↗</a><button id="session-finish" class="pill" disabled>Finish this class</button><button id="bonus-open" class="pill">Bonus round</button><button id="settings-open" class="icon-button" aria-label="Draw settings">⚙</button></div></header>
+<header><span class="site-title">IERG2060 · Tutorial group 3 · Round 2 Bonus</span><div class="header-actions"><button id="settings-open" class="icon-button" aria-label="Settings">⚙</button></div></header>
 <section id="connection-panel" class="connection-panel" aria-labelledby="connection-heading" hidden>
 <h2 id="connection-heading">Connect to Google Sheets</h2>
 <p>Use your instructor Google account to open this class.</p>
 <div class="connection-actions"><button id="connect-main" class="pill accent" type="button">Sign in with Google</button><button id="sign-in-cancel" class="pill" type="button" hidden>Cancel sign-in</button></div>
-<p id="connection-status" role="status">Sign in to load this class. The draw stays on this page.</p>
+<p id="connection-status" role="status">Sign in to load this class.</p>
 </section>
 <main>
-<section id="test-banner" class="connection-panel" hidden><h2>TEST · 35 fictional students</h2><p>All draws, attendance and Bonus registrations use the separate test dataset.</p></section>
-<section id="session-finished" class="connection-panel" hidden><h2>Class finished</h2><p id="session-finished-text"></p><div class="connection-actions"><button id="session-new" class="pill accent">Start new class</button><button id="session-resume" class="pill">Resume this class</button></div></section>
-<section id="draw-table" class="draw-table" aria-label="Student draw">
-<div class="table-heading"><span id="round-label" class="round-label">THIS DRAW</span><span id="deck-caption"></span></div>
-<div id="results" class="results" aria-label="Draw results"></div><p id="announcement" class="sr-only" role="status" aria-live="polite"></p><p id="notice" class="notice" role="status" hidden></p>
-<div id="draw-review" class="draw-review" hidden>
+<section id="test-banner" class="connection-panel" hidden><h2>TEST · 35 fictional students</h2><p>Bonus sign-ups and draws use the separate test dataset. Test SIDs are 1155000001 to 1155000035.</p></section>
+<section id="draw-table" class="draw-table" aria-label="Round 2 Bonus">
+<div class="table-heading"><span id="round-label" class="round-label">ROUND 2 · BONUS</span><span id="deck-caption"></span></div>
+<div class="r2-settings"><label for="session-date">Class date</label><input id="session-date" type="date"><label for="question">Question</label><input id="question" type="number" min="1" max="500" value="1"><span id="r2-progress" class="r2-progress"></span></div>
+<p id="notice" class="notice" role="status" hidden></p>
+
+<div id="phase-idle" class="phase" hidden>
+<p class="phase-lead">Volunteers first. Students who have not presented in round 2 are drawn before anyone else.</p>
+<div class="phase-actions"><button id="open-signup" class="draw-button">Open volunteer sign-up</button><button id="lottery-start" class="pill big">Lottery (no volunteers)</button></div>
+</div>
+
+<div id="phase-open" class="phase" hidden>
+<div class="signup-share"><div id="signup-qr" class="signup-qr" aria-label="Student sign-up QR code"></div><div><p class="eyebrow">SCAN TO VOLUNTEER</p><p class="signup-count"><strong id="signup-count">0</strong> signed up</p><p class="signup-help">Students enter their SID. Each confirmation shows their roster No. and masked name.</p><a id="signup-link" class="signup-link" target="_blank" rel="noopener">Open sign-up page ↗</a></div></div>
+<div class="phase-actions"><button id="close-draw" class="draw-button">Close &amp; draw a volunteer</button><button id="cancel-signup" class="pill">Cancel sign-up</button></div>
+</div>
+
+<div id="phase-closed" class="phase" hidden>
+<p id="closed-lead" class="phase-lead"></p>
+<div class="phase-actions"><button id="draw-volunteer" class="draw-button">Draw a volunteer</button><button id="lottery-fallback" class="draw-button">Lottery (no volunteers)</button><button id="reopen-signup" class="pill">Open a new sign-up</button></div>
+</div>
+
+<div id="volunteers" class="volunteers" hidden>
+<ul id="volunteer-list" class="volunteer-list" aria-label="Volunteers"></ul>
+<form id="manual-form" class="manual-form"><label for="manual-no">Add by roster No.</label><input id="manual-no" type="text" inputmode="numeric" autocomplete="off" placeholder="e.g. 12"><button class="pill" type="submit">Add</button></form>
+</div>
+
+<div id="phase-result" class="phase" hidden>
+<div id="results" class="results" aria-label="Selected student"></div><p id="announcement" class="sr-only" role="status" aria-live="polite"></p>
+<p id="result-detail" class="result-detail"></p>
+<div id="lottery-actions" class="phase-actions"><button id="lottery-confirm" class="pill accent big">Confirm</button><button id="lottery-skip" class="pill big">Not here · draw again</button><button id="lottery-cancel" class="pill">Cancel</button></div>
+<div id="answer-panel" class="draw-review">
 <div class="timer-setup"><label for="answer-minutes">Time limit (minutes)</label><input id="answer-minutes" type="number" min="1" max="180" step="1" value="5" inputmode="numeric"></div>
 <output id="answer-clock" class="answer-clock" role="timer" aria-live="off">05:00</output><p id="timer-status" role="status">Ready to start.</p>
-<div class="answer-actions"><button id="draw-save" class="pill accent">Start</button><button id="draw-cancel" class="pill">Redraw</button><button id="answer-bonus" class="pill" disabled>Bonus round</button><button id="answer-next" class="pill" disabled>Next student</button></div><p id="draw-save-status" role="status"></p></div>
-<div id="draw-controls" class="draw-controls">
-<label class="question-control" for="question"><span class="control-label">QUESTION NUMBER</span><input id="question" type="number" min="1" max="500" value="1" aria-label="Question number"></label>
-<button id="draw" class="draw-button" disabled><span id="draw-label">Draw one student</span></button>
-<div class="pool-info"><span class="control-label" id="next-round">ELIGIBLE STUDENTS</span><strong id="pool-count">— <small>available</small></strong></div>
+<div class="answer-actions"><button id="timer-start" class="pill accent">Start</button><button id="next-question" class="pill">Next question</button></div>
 </div>
-<form id="absence-form" class="absence-control" novalidate><label for="session-date">Class date</label><input id="session-date" type="date" aria-label="Class date"><label for="absent">Absent</label><input id="absent" type="text" autocomplete="off" placeholder="10,21,26" aria-describedby="absence-help"><span id="absence-help">No. separated by commas · no spaces · leave empty if none</span><button id="attendance-save" class="pill" type="button" disabled>Save attendance</button></form><p id="attendance-status" class="attendance-status" role="status"></p><p id="records-warning" class="notice error" role="status" hidden></p>
+</div>
+
+<div id="pending-panel" class="notice error" hidden><span id="pending-text"></span> <button id="pending-retry" class="pill">Retry the same request</button></div>
+
+<details id="today" class="today"><summary>Round 2 record</summary><ol id="today-list" class="today-list"></ol><p id="not-presented" class="not-presented"></p></details>
 </section>
 <section class="presentation-guide" aria-labelledby="presentation-heading">
 <h2 id="presentation-heading">Presentation requirements</h2>
@@ -39,8 +64,5 @@
 <p>Marks will be deducted for poor explanations, even if your final answer is correct.</p>
 </section>
 </main></div>
-<dialog id="finish-dialog"><div class="dialog-heading"><h2>Finish this class?</h2><button class="icon-button" data-close="finish-dialog" aria-label="Close finish dialog">×</button></div><p id="finish-detail"></p><div class="settings-actions"><button id="finish-confirm" class="pill accent">Finish this class</button><button class="pill" data-close="finish-dialog">Keep teaching</button></div><p>Choose Start new class for another date, or Resume this class to continue the same date.</p><p id="finish-status" role="status"></p></dialog>
-<dialog id="new-class-dialog" aria-labelledby="new-class-heading"><div class="dialog-heading"><h2 id="new-class-heading">Start new class</h2><button class="icon-button" data-close="new-class-dialog" aria-label="Close new class dialog">×</button></div><p>Tutorial group 3 · The same students and participation progress continue across class dates.</p><form id="new-class-form" novalidate><label for="new-class-date">Class date</label><input id="new-class-date" type="date" required><p>For a new date, save attendance before drawing. Question numbers start at 1; participation rounds continue.</p><div class="settings-actions"><button id="new-class-confirm" class="pill accent" type="submit">Start class</button><button class="pill" type="button" data-close="new-class-dialog">Cancel</button></div><p id="new-class-status" role="status"></p></form></dialog>
-<dialog id="settings-dialog"><div class="dialog-heading"><h2>Draw settings</h2><button class="icon-button" data-close="settings-dialog" aria-label="Close settings">×</button></div><p>Google Sheets is already configured. Sign in with your instructor account in the Google window, then click Continue. This page connects automatically.</p><p id="environment-status"></p><button id="mode-switch" class="pill" type="button">Switch to Test</button><form id="cloud-form"><input id="cloud-url" type="hidden"><input id="student-url" type="hidden"><button class="pill" type="submit">Reconnect</button></form><p id="cloud-account" role="status"></p><p id="cloud-status" role="status">Saved in this browser.</p><div class="settings-actions"><button id="cloud-refresh" class="pill" hidden>Reload cloud progress</button><button id="records-refresh" class="pill" hidden>Refresh record sheets</button><button id="cloud-names" class="pill" hidden>Refresh names</button><button id="cloud-retry" class="pill" hidden>Retry saving</button><button id="cloud-initialize" class="pill" hidden>Start with browser records</button><button id="cloud-source-initialize" class="pill" hidden>Start with source sheet records</button></div><div class="settings-actions"><button id="choose-file" class="pill">Import CSV / JSON</button><input id="import-file" type="file" accept=".csv,.json" hidden><button id="backup" class="pill">Download backup</button></div><div id="import-preview" hidden><p id="import-summary"></p><button id="confirm-import" class="pill accent">Use these records</button><button id="cancel-import" class="pill">Cancel</button></div><p id="settings-status" role="status"></p></dialog>
-<dialog id="bonus-dialog" class="bonus-dialog"><div class="dialog-heading"><span class="eyebrow">BONUS</span><button class="icon-button" data-close="bonus-dialog" aria-label="Close bonus window">×</button></div><div id="bonus-container"></div></dialog>
+<dialog id="settings-dialog"><div class="dialog-heading"><h2>Settings</h2><button class="icon-button" data-close="settings-dialog" aria-label="Close settings">×</button></div><p id="environment-status"></p><button id="mode-switch" class="pill" type="button">Switch to Test</button><form id="cloud-form"><button class="pill" type="submit">Reconnect</button></form><p id="cloud-account" role="status"></p><p id="cloud-status" role="status"></p><div class="settings-actions"><button id="cloud-refresh" class="pill" hidden>Reload cloud progress</button><button id="records-refresh" class="pill" hidden>Re-read answer sheet</button><button id="backup" class="pill" disabled>Download backup</button></div><p id="settings-status" role="status"></p></dialog>
 </body></html>

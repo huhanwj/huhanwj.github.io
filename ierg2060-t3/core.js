@@ -73,6 +73,10 @@ function studentName(value) {
   return value.trim().replace(/\s+/g, ' ');
 }
 
+export function validDate(value) {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value + 'T00:00:00Z')) && new Date(value + 'T00:00:00Z').toISOString().slice(0, 10) === value;
+}
+
 function checkedQuestionStart(value, count) {
   if (!Number.isSafeInteger(value) || value < 1 || value > 500 || value + count - 1 > 500) throw Error('Question numbers must be integers from 1 to 500, including the final question.');
   return value;
@@ -119,12 +123,21 @@ export function validateState(s) {
   const bonus = s.bonus.map(entry => {
     if (!entry || !known.has(entry.no)) throw Error('Bonus record contains an unknown roster number.');
     const id = token(entry.round, 'Invalid Bonus round ID.');
-    const entrants = knownNumbers(entry.entrants, known, 'Invalid or duplicate Bonus entries.', false);
-    if (rounds.has(id) || !entrants.includes(entry.no)) throw Error('Invalid or duplicate Bonus result.');
+    // A round 2 lottery record has no volunteers.
+    const lottery = entry.source === 'lottery';
+    const entrants = knownNumbers(entry.entrants, known, 'Invalid or duplicate Bonus entries.', lottery);
+    if (rounds.has(id) || (lottery ? entrants.length : !entrants.includes(entry.no))) throw Error('Invalid or duplicate Bonus result.');
     rounds.add(id);
-    return { round: id, no: entry.no, entrants, drawnAt: timestamp(entry.drawnAt) };
+    const record = { round: id, no: entry.no, entrants, drawnAt: timestamp(entry.drawnAt) };
+    if (entry.stage !== undefined || lottery) {
+      if (entry.stage !== 2 || !['volunteer', 'lottery'].includes(entry.source) || !validDate(entry.date)) throw Error('Invalid round 2 Bonus result.');
+      Object.assign(record, { stage: 2, source: entry.source, question: checkedQuestionStart(entry.question, 1), date: entry.date });
+    }
+    return record;
   });
-  return { version: 2, students, absent, batches, bonus };
+  // Roster numbers with a Question 2 mark in the teaching sheet.
+  const r2Source = s.r2Source === undefined ? [] : knownNumbers(s.r2Source, known, 'Invalid answer-sheet record.').sort((a, b) => a - b);
+  return { version: 2, students, absent, batches, bonus, r2Source };
 }
 
 export function mergeRoster(s, roster) {
@@ -200,4 +213,23 @@ export function drawBatch(s, n, questionStart, exclude = null) {
   state.batches.push(batch);
   state.batches = state.batches.slice(-500);
   return validateState(state);
+}
+
+// Round 2 is voluntary Bonus. A student has presented once the teaching sheet
+// has a Question 2 mark or after any round 2 Bonus drawn here; those who have
+// not are preferred in every draw.
+export function round2Presented(s) {
+  const presented = new Set(s.r2Source || []);
+  for (const entry of s.bonus) if (entry.stage === 2) presented.add(entry.no);
+  return presented;
+}
+
+// Lottery pool when nobody volunteers: students who have not presented in
+// round 2, or everyone else once those are all presented or skipped as not in
+// class. Skipped students stay eligible for later questions.
+export function lotteryPool(s, skipped = []) {
+  const presented = round2Presented(s), skip = new Set(skipped);
+  const available = s.students.map(p => p.no).filter(no => !skip.has(no));
+  const fresh = available.filter(no => !presented.has(no));
+  return fresh.length ? fresh : available;
 }

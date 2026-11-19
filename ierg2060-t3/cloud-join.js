@@ -8,12 +8,9 @@ const harnessRun = query.get('loadtest');
 const harnessClient = query.get('client');
 const harness = testMode && window.parent !== window && /^[a-f0-9-]{36}$/i.test(harnessRun || '') && /^[a-zA-Z0-9_-]{1,80}$/.test(harnessClient || '');
 const params = new URLSearchParams(location.hash.slice(1));
-if (!testMode && params.has('round') && !params.has('cloud')) {
-  // Existing PeerJS links still use the original registration flow.
-  await import('./join.js?v=2');
-} else {
+{
   const form = document.getElementById('join-form');
-  const input = document.getElementById('roster-no');
+  const input = document.getElementById('sid');
   const button = document.getElementById('join-button');
   const retry = document.getElementById('retry-button');
   const status = document.getElementById('status');
@@ -23,13 +20,14 @@ if (!testMode && params.has('round') && !params.has('cloud')) {
   let client = null;
   let busy = false;
   let closed = false;
-  let acceptedNo = null;
+  let accepted = null;
   let attempt = null;
   let suspended = false;
   let run = 0;
   let retryWait = null;
   let reconnect = false;
-  const maxAttempts = 3;
+  // The server queues signups for up to 20 s, so busy replies should be rare.
+  const maxAttempts = 4;
   const transientMessages = new Set([
     'The cloud service is busy. Retry the same request.',
     'Registration service unavailable. Retry or check with the instructor.'
@@ -40,14 +38,20 @@ if (!testMode && params.has('round') && !params.has('cloud')) {
   }
   const show = (message, state = '') => { status.textContent = message; status.dataset.state = state; };
   const parseNo = value => /^\d+$/.test(String(value).trim()) && Number.isSafeInteger(Number(value)) && Number(value) > 0 ? Number(value) : null;
+  const parseSid = value => /^\d{8,12}$/.test(String(value).trim()) ? String(value).trim() : null;
+  const maskSid = sid => '•'.repeat(Math.max(0, sid.length - 3)) + sid.slice(-3);
+  const receipt = value => value && parseNo(value.no) !== null && typeof value.name === 'string' && value.name.length <= 200 ? {no: parseNo(value.no), name: value.name} : null;
+  const acceptedText = () => `You’re signed up: No. ${accepted.no}${accepted.name ? ` · ${accepted.name}` : ''}. If this is not you, tell your instructor. You can close this page.`;
+  // Load-test frames know their fictional roster No.; real students do not.
+  let harnessNo = null;
   function remember(value) { try { localStorage.setItem(storageKey, JSON.stringify(value)); } catch { /* The server registration remains saved. */ } }
   function forgetAttempt() { try { localStorage.removeItem(storageKey); } catch { /* Registration can still be retried. */ } }
   function controls() {
-    input.disabled = busy || suspended || closed || acceptedNo !== null || !!attempt;
-    button.disabled = busy || suspended || closed || acceptedNo !== null;
-    button.textContent = acceptedNo !== null ? `No. ${acceptedNo} registered` : busy ? 'Confirming registration…' : attempt ? `Retry No. ${attempt.no}` : 'Join the bonus draw';
+    input.disabled = busy || suspended || closed || accepted !== null || !!attempt;
+    button.disabled = busy || suspended || closed || accepted !== null;
+    button.textContent = accepted !== null ? `No. ${accepted.no} signed up` : busy ? 'Confirming…' : attempt ? 'Retry sign-up' : 'Volunteer';
     retry.disabled = busy || suspended;
-    retry.textContent = attempt ? `Retry No. ${attempt.no}` : 'Retry connection';
+    retry.textContent = attempt ? 'Retry sign-up' : 'Retry connection';
   }
   function connect() {
     client?.destroy();
@@ -74,23 +78,24 @@ if (!testMode && params.has('round') && !params.has('cloud')) {
   }
   function restoredStatus() {
     retry.hidden = !attempt;
-    if (acceptedNo !== null) show(`You’re registered as No. ${acceptedNo}. You can now close this page.`, 'success');
-    else if (attempt) show(`No confirmation yet for No. ${attempt.no}. Retry to confirm the same registration.`, 'error');
-    else if (!closed) show('Enter your roster No. to register.');
+    if (accepted !== null) show(acceptedText(), 'success');
+    else if (attempt) show(`No confirmation yet for SID ${maskSid(attempt.sid)}. Retry to confirm the same sign-up.`, 'error');
+    else if (!closed) show('Enter your SID to volunteer.');
     controls();
   }
   async function join() {
-    if (busy || suspended || closed || acceptedNo !== null) return;
-    const no = attempt?.no ?? parseNo(input.value);
-    if (no === null) { show('Enter your full roster No. using digits only.', 'error'); input.focus(); return; }
-    if (!attempt) attempt = {no, requestId: crypto.randomUUID()};
+    if (busy || suspended || closed || accepted !== null) return;
+    const sid = attempt?.sid ?? parseSid(input.value);
+    if (sid === null) { show('Enter your full SID using digits only.', 'error'); input.focus(); return; }
+    if (!attempt) attempt = {sid, requestId: crypto.randomUUID()};
     const requestId = attempt.requestId;
+    const no = harnessNo;
     const startedAt = performance.now();
     remember({pending: attempt});
-    input.value = String(no);
+    input.value = sid;
     busy = true;
     retry.hidden = true;
-    show(`Confirming registration for No. ${no}…`);
+    show(`Confirming sign-up for SID ${maskSid(sid)}…`);
     controls();
     const currentRun = ++run;
     const isCurrent = () => currentRun === run && !suspended;
@@ -103,17 +108,17 @@ if (!testMode && params.has('round') && !params.has('cloud')) {
           if (!client || reconnect) connect();
           const result = await client.call('bonusJoin', payload, {onDispatch:() => report('dispatch', {no,requestId,attemptNumber:number+1,dispatchAtMs:performance.timeOrigin+performance.now()})});
           if (!isCurrent()) return;
-          if (result?.status !== 'joined' || result.no !== no) {
-            const error = new Error('The service did not confirm this roster No.');
+          if (result?.status !== 'joined' || !receipt(result)) {
+            const error = new Error('The service did not confirm this sign-up.');
             error.invalidResult = true;
             throw error;
           }
           report('attempt', {no,requestId,attemptNumber:number+1,rpcMs:performance.now()-rpcStartedAt,success:true,serverBusy:false});
-          acceptedNo = result.no;
+          accepted = receipt(result);
           attempt = null;
-          remember({confirmed: acceptedNo});
-          show(`You’re registered as No. ${acceptedNo}. You can now close this page.`, 'success');
-          report('confirmed', {no,requestId,totalMs:performance.now()-startedAt,pending:false});
+          remember({confirmed: accepted});
+          show(acceptedText(), 'success');
+          report('confirmed', {no:accepted.no,requestId,totalMs:performance.now()-startedAt,pending:false});
           return;
         } catch (error) {
           if (!isCurrent()) return;
@@ -124,7 +129,7 @@ if (!testMode && params.has('round') && !params.has('cloud')) {
           const transient = !error.invalidResult && (!error.serverConfirmed || knownTransient);
           reconnect = !error.serverConfirmed;
           if (transient && number + 1 < maxAttempts) {
-            show(`No confirmation yet for No. ${no}. Retrying the same registration (${number + 2}/${maxAttempts})…`);
+            show(`No confirmation yet. Retrying the same sign-up (${number + 2}/${maxAttempts})…`);
             if (!await waitToRetry(number) || !isCurrent()) return;
             continue;
           }
@@ -134,7 +139,7 @@ if (!testMode && params.has('round') && !params.has('cloud')) {
             closed = /closed|expired/i.test(error.message);
             show(error.message, 'error');
           } else {
-            show(`No confirmation yet for No. ${no}. Retry the same registration. ${error.message}`, 'error');
+            show(`No confirmation yet. Retry the same sign-up. ${error.message}`, 'error');
           }
           retry.hidden = !attempt;
           report('error', {no,requestId,totalMs:performance.now()-startedAt,pending:!!attempt,message:status.textContent});
@@ -150,9 +155,12 @@ if (!testMode && params.has('round') && !params.has('cloud')) {
     if (event.source !== window.parent || event.origin !== location.origin || !data || data.type !== 'ierg2060-loadtest-submit' || data.runId !== harnessRun || data.clientId !== harnessClient) return;
     const no = parseNo(data.no);
     if (no === null || no > 35) return;
-    if (acceptedNo !== null) {report('confirmed', {no:acceptedNo,totalMs:0,pending:false,restored:true});return;}
-    if (busy || suspended || closed || (attempt && attempt.no !== no)) {report('error', {no,pending:!!attempt,message:'This student page already has a different or active registration.'});return;}
-    input.value = String(no);
+    // Fictional test SIDs 1155000001-1155000035 map to Test Student 01-35.
+    const sid = '1155' + String(no).padStart(6, '0');
+    if (accepted !== null) {report('confirmed', {no:accepted.no,totalMs:0,pending:false,restored:true});return;}
+    if (busy || suspended || closed || (attempt && attempt.sid !== sid)) {report('error', {no,pending:!!attempt,message:'This student page already has a different or active registration.'});return;}
+    harnessNo = no;
+    input.value = sid;
     void join();
   });
   form.addEventListener('submit', event => { event.preventDefault(); join(); });
@@ -163,12 +171,12 @@ if (!testMode && params.has('round') && !params.has('cloud')) {
     if (!endpoint || !room || !/^[a-zA-Z0-9_-]{16,100}$/.test(room)) throw new Error('This registration link is incomplete. Scan the QR code shown by your instructor.');
     try {
       const stored = JSON.parse(localStorage.getItem(storageKey) || 'null');
-      if (parseNo(stored?.confirmed) !== null) acceptedNo = parseNo(stored.confirmed);
-      else if (parseNo(stored?.pending?.no) !== null && typeof stored.pending.requestId === 'string' && /^[a-f0-9-]{36}$/i.test(stored.pending.requestId)) attempt = {no: parseNo(stored.pending.no), requestId: stored.pending.requestId};
-      if (acceptedNo !== null || attempt) input.value = String(acceptedNo ?? attempt.no);
-    } catch { /* A local receipt is optional; the server deduplicates repeated numbers. */ }
+      if (receipt(stored?.confirmed)) accepted = receipt(stored.confirmed);
+      else if (parseSid(stored?.pending?.sid) !== null && typeof stored.pending.requestId === 'string' && /^[a-f0-9-]{36}$/i.test(stored.pending.requestId)) attempt = {sid: parseSid(stored.pending.sid), requestId: stored.pending.requestId};
+      if (attempt) input.value = attempt.sid;
+    } catch { /* A local receipt is optional; the server deduplicates repeated sign-ups. */ }
     // Warm the bridge while students type. bonusJoin performs round validation.
-    if (acceptedNo === null) connect();
+    if (accepted === null) connect();
     restoredStatus();
     report('ready', {phase:'page'});
     window.addEventListener('pagehide', () => {

@@ -4,6 +4,12 @@ const ADMIN_EMAIL_ = 'huhanwj@gmail.com';
 const BONUS_META_ = 'BONUS_ACTIVE_V1';
 const BONUS_PENDING_ = 'BONUS_SYNC_V1';
 const BONUS_SLOT_ = 'BONUS_SLOT_V1:';
+// Salted SID hashes map a student's SID to a roster No.; raw SIDs are never stored.
+const SID_INDEX_ = 'SID_INDEX_V1';
+const SID_SALT_ = 'SID_SALT_V1';
+// Signups queue on the script lock for one tiny property write; wait long
+// enough that a whole class scanning together is served, not rejected as busy.
+const SIGNUP_WAIT_MS_ = 20000;
 // A dedicated test deployment sets this true in its deployed version only.
 // Even legacy rpc callers on that deployment are then confined to test data.
 const TEST_DEPLOYMENT_ONLY_ = false;
@@ -16,11 +22,14 @@ function testContext_(fn) {
   TEST_CONTEXT_ = true;
   try {return fn();} finally {TEST_CONTEXT_ = previous;}
 }
+function scopedProperty_(key) {
+  return key === 'STORE_ID' || key === BONUS_META_ || key === BONUS_PENDING_ || key === SID_INDEX_ || key === SID_SALT_ || key.startsWith(BONUS_SLOT_);
+}
 function storageProperties_() {
   const properties = PropertiesService.getScriptProperties();
   if (!TEST_CONTEXT_) return properties;
   const key_ = key => {
-    if (key !== 'STORE_ID' && key !== BONUS_META_ && key !== BONUS_PENDING_ && !key.startsWith(BONUS_SLOT_)) throw Error('Invalid test storage property.');
+    if (!scopedProperty_(key)) throw Error('Invalid test storage property.');
     return 'TEST_' + key;
   };
   return {
@@ -29,7 +38,7 @@ function storageProperties_() {
     deleteProperty:key => properties.deleteProperty(key_(key)),
     getProperties:() => {
       const values = properties.getProperties(), scoped = {};
-      Object.keys(values).filter(key => key === 'TEST_STORE_ID' || key === 'TEST_' + BONUS_META_ || key === 'TEST_' + BONUS_PENDING_ || key.startsWith('TEST_' + BONUS_SLOT_)).forEach(key => {scoped[key.slice(5)]=values[key];});
+      Object.keys(values).filter(key => key.startsWith('TEST_') && scopedProperty_(key.slice(5))).forEach(key => {scoped[key.slice(5)]=values[key];});
       return scoped;
     },
     setProperties:values => {
@@ -76,6 +85,8 @@ function setupTest_() {
   if (!document.state) throw Error('The test state is missing. Recover the test spreadsheet without resetting production.');
   syncAttendanceSheet_(book, document);
   refreshNames_(document.state,roster);
+  // Fictional SIDs 1155000001-1155000035 match Test Student 01-35.
+  saveSidIndex_(roster, new Map(roster.map(p => [p.no,testSid_(p.no)])));
   const reportsWarning = refreshReports_(book,document);
   console.log('Test storage: ' + storageUrl_());
   return Object.assign(ownerMetadata_(document),reportsWarning ? {reportsWarning:reportsWarning} : {});
@@ -163,14 +174,16 @@ function rpc(action, payload, sessionToken) {
   if (action === 'load') {
     return locked_(function () {
       const document = read_(), roster = roster_();
-      syncAttendanceSheet_(book_(), document);
       if (document.state) refreshNames_(document.state, roster);
-      return Object.assign({state:document.state,revision:document.revision,roster:roster}, ownerMetadata_(document));
+      const sync = syncSourceAnswers_(document);
+      if (sync.changed) {document.revision++;write_(document, false);}
+      return Object.assign({state:document.state,revision:document.revision,roster:roster}, ownerMetadata_(document), sync.warning ? {sourceWarning:sync.warning} : {});
     });
   }
   if (action === 'recordsRefresh') return locked_(refreshRecords_);
   if (action === 'bonusStatus') return locked_(function () {const document=read_();return Object.assign({room:document.room}, ownerMetadata_(document));});
-  if (!['initialize','save','attendanceSave','bonusOpen','bonusClose','bonusDraw','bonusReset','bonusRemove'].includes(action)) throw Error('Unknown cloud action.');
+  if (action === 'bonusLive') return bonusLive_();
+  if (!['initialize','save','attendanceSave','bonusOpen','bonusClose','bonusDraw','bonusReset','bonusRemove','bonusAdd','round2Lottery'].includes(action)) throw Error('Unknown cloud action.');
   return locked_(function () {
     const document = read_();
     const requestId = token_(payload.requestId, 'A requestId is required.');
@@ -180,9 +193,9 @@ function rpc(action, payload, sessionToken) {
       if (prior.fingerprint !== fingerprint) throw Error('This requestId was already used for a different operation.');
       return result_(document, action, prior.room);
     }
-    // Preserve Sheet corrections before a new owner action can regenerate reports.
-    // Exact committed retries above retain their original receipt semantics.
-    if (['initialize','save','attendanceSave','bonusDraw'].includes(action)) syncAttendanceSheet_(book_(), document);
+    // Draws use the latest answer records. If the source sheet cannot be read,
+    // the last synchronized list is used. Exact retries above keep their receipt.
+    if (['bonusDraw','round2Lottery'].includes(action)) syncSourceAnswers_(document);
     let roomReceipt;
     if (action === 'save' || action === 'initialize') {
       if (payload.revision !== document.revision) throw Error('Cloud progress changed. Reload before saving.');
@@ -191,8 +204,9 @@ function rpc(action, payload, sessionToken) {
       const roster = roster_();
       const next = cleanState_(payload.state, roster);
       if (document.state) {
-        // Bonus results are committed by the server, independently of host polling.
+        // Bonus results and answer-sheet records are committed by the server.
         next.bonus = document.state.bonus;
+        next.r2Source = document.state.r2Source || [];
         forwardOnly_(document.state, next);
       }
       if (action === 'save') {
@@ -223,6 +237,20 @@ function rpc(action, payload, sessionToken) {
       const absent = numbers_(payload.absent, new Set(document.state.students.map(p => p.no)), true);
       document.room = {id:Utilities.getUuid(),open:true,entrants:[],winner:null,absent:absent,drawnAt:null};
       roomReceipt = document.room;
+    } else if (action === 'round2Lottery') {
+      // Fallback when nobody volunteers: the browser previews a student (and can
+      // skip someone who is not in class); the server records only the confirmed one.
+      if (!document.state) throw Error('Initialize cloud progress first.');
+      if (document.room && document.room.open) throw Error('Close volunteer registration before the lottery.');
+      const question = question_(payload.question), date = date_(payload.date);
+      if (!document.state.students.some(p => p.no === payload.no)) throw Error('Unknown roster number.');
+      // Skipped students were not in class for this question; they keep priority.
+      const skipped = numbers_(payload.skipped, new Set(document.state.students.map(p => p.no)), true);
+      const presented = round2Presented_(document.state);
+      if (skipped.includes(payload.no)) throw Error('This student was skipped for this question.');
+      if (presented.has(payload.no) && document.state.students.some(p => !presented.has(p.no) && !skipped.includes(p.no))) throw Error('This student already presented in round 2. Draw again.');
+      document.state.bonus.push({round:Utilities.getUuid(),no:payload.no,entrants:[],drawnAt:new Date().toISOString(),stage:2,source:'lottery',question:question,date:date});
+      document.revision++;
     } else if (action === 'bonusReset') {
       if (document.room) requireRoom_(document, payload.room);
       else if (payload.room) throw Error('This Bonus link has expired. Ask for the latest QR code.');
@@ -234,21 +262,31 @@ function rpc(action, payload, sessionToken) {
         if (room.winner) throw Error('This Bonus result is already saved.');
         room.entrants = room.entrants.filter(no => no !== payload.no);
       }
+      if (action === 'bonusAdd') {
+        if (room.winner) throw Error('This Bonus result is already saved.');
+        if (!document.state.students.some(p => p.no === payload.no)) throw Error('Unknown roster number.');
+        if (!room.entrants.includes(payload.no)) room.entrants = room.entrants.concat(payload.no).sort((a,b) => a-b);
+      }
       if (action === 'bonusDraw') {
         if (room.winner) {roomReceipt = room;}
         else {
           if (room.open) throw Error('Close Bonus registration before drawing.');
+          const question = question_(payload.question), date = date_(payload.date);
           const roster = roster_();
           refreshNames_(document.state, roster);
           const absent = new Set(room.absent);
           const eligible = new Set(document.state.students.filter(p => !absent.has(p.no)).map(p => p.no));
           room.entrants = room.entrants.filter(no => eligible.has(no)).sort((a,b) => a-b);
           if (!room.entrants.length) throw Error('There are no eligible Bonus entries.');
-          const no = room.entrants[Math.floor(Math.random() * room.entrants.length)];
+          // Volunteers who have not presented in round 2 go first.
+          const presented = round2Presented_(document.state);
+          const fresh = room.entrants.filter(no => !presented.has(no));
+          const pool = fresh.length ? fresh : room.entrants;
+          const no = pool[Math.floor(Math.random() * pool.length)];
           const student = document.state.students.find(p => p.no === no);
-          room.winner = {no:no,name:student.name};
+          room.winner = {no:no,name:student.name,fresh:fresh.length > 0,pool:pool.length};
           room.drawnAt = new Date().toISOString();
-          document.state.bonus.push({round:room.id,no:no,entrants:room.entrants.slice(),drawnAt:room.drawnAt});
+          document.state.bonus.push({round:room.id,no:no,entrants:room.entrants.slice(),drawnAt:room.drawnAt,stage:2,source:'volunteer',question:question,date:date});
           document.revision++;
           roomReceipt = room;
         }
@@ -257,7 +295,7 @@ function rpc(action, payload, sessionToken) {
     }
     document.requests.push({id:requestId,fingerprint:fingerprint,room:roomReceipt || null});
     document.requests = document.requests.slice(-30);
-    const reportsWarning = write_(document, ['initialize','save','attendanceSave','bonusDraw'].includes(action));
+    const reportsWarning = write_(document, ['initialize','save','attendanceSave','bonusDraw','round2Lottery'].includes(action));
     const result = result_(document, action, roomReceipt);
     if (reportsWarning) result.reportsWarning=reportsWarning;
     return result;
@@ -310,17 +348,22 @@ function publicRpc_(action, payload) {
   // Reject malformed requests before touching the shared lock or spreadsheet.
   const request = publicPayload_(action, payload);
   try {
+    // The SID lookup reads one property and needs no lock. Only the slot write
+    // is serialized, so queued signups each hold the lock for milliseconds.
+    const student = action === 'bonusJoin' ? sidStudent_(request.sid) : null;
     return locked_(function () {
       const store = bonusStore_();
       if (!store.meta || store.meta.id !== request.room) throw Error('This Bonus link has expired. Ask for the latest QR code.');
       if (action === 'bonusInfo') return {id:store.meta.id,open:store.meta.open};
-      return join_(store, request);
-    }, 2000);
+      return join_(store, student);
+    }, action === 'bonusJoin' ? SIGNUP_WAIT_MS_ : 2000);
   } catch (error) {
     const expected = [
       'This Bonus link has expired. Ask for the latest QR code.',
       'Bonus registration is closed.',
       'This roster No. cannot join. Check with the instructor.',
+      'This SID is not on the Tutorial 3 list. Check it, or ask the instructor to add you.',
+      'SID sign-up is not set up. Ask the instructor to add you.',
       'The cloud service is busy. Retry the same request.'
     ];
     if (error && expected.includes(error.message)) throw Error(error.message);
@@ -330,14 +373,13 @@ function publicRpc_(action, payload) {
 }
 function publicPayload_(action, payload) {
   const invalid = () => {throw Error('Invalid registration request.');};
-  const allowed = action === 'bonusJoin' ? ['room','no','requestId'] : ['room'];
+  const allowed = action === 'bonusJoin' ? ['room','sid','requestId'] : ['room'];
   if (Object.keys(payload).some(key => !allowed.includes(key))) invalid();
   if (typeof payload.room !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(payload.room)) invalid();
   if (action === 'bonusInfo') return {room:payload.room};
-  const no = typeof payload.no === 'string' && /^\d{1,16}$/.test(payload.no) ? Number(payload.no) : payload.no;
-  if (!Number.isSafeInteger(no) || no < 1) invalid();
+  if (typeof payload.sid !== 'string' || !/^\d{8,12}$/.test(payload.sid)) invalid();
   if (Object.prototype.hasOwnProperty.call(payload, 'requestId') && (typeof payload.requestId !== 'string' || !payload.requestId.trim() || payload.requestId.length > 200)) invalid();
-  return {room:payload.room,no:no};
+  return {room:payload.room,sid:payload.sid};
 }
 function authenticate_() {
   // An owner-executed public deployment has the owner's effective identity even
@@ -390,7 +432,7 @@ function write_(document, reports) {
 }
 function result_(document, action, roomReceipt) {
   const metadata = ownerMetadata_(document);
-  if (action === 'initialize' || action === 'save' || action === 'attendanceSave') return Object.assign({state:document.state,revision:document.revision}, metadata);
+  if (action === 'initialize' || action === 'save' || action === 'attendanceSave' || action === 'round2Lottery') return Object.assign({state:document.state,revision:document.revision}, metadata);
   if (action === 'bonusDraw') return Object.assign({state:document.state,revision:document.revision,room:roomReceipt || document.room}, metadata);
   return Object.assign({room:roomReceipt || document.room}, metadata);
 }
@@ -462,15 +504,116 @@ function syncBonus_(document, properties) {
   if (Object.keys(changed).length) properties.setProperties(changed);
   properties.setProperty(BONUS_META_, JSON.stringify(room ? {id:room.id,open:room.open,drawn:!!room.winner} : null));
 }
-function join_(store, payload) {
-  const key = bonusSlotKey_(store.meta.id, payload.no);
+function join_(store, student) {
+  const key = bonusSlotKey_(store.meta.id, student.no);
   const value = store.properties.getProperty(key);
+  const receipt = {status:'joined',no:student.no,name:student.name};
   // Recover accepted receipts after closure or a lost response, without a write.
-  if (value === '1') return {status:'joined',no:payload.no};
+  if (value === '1') return receipt;
   if (!store.meta.open || store.meta.drawn) throw Error('Bonus registration is closed.');
   if (value !== '0') throw Error('This roster No. cannot join. Check with the instructor.');
   store.properties.setProperty(key, '1');
-  return {status:'joined',no:payload.no};
+  return receipt;
+}
+// Owner polling while registration is open. Reads only the journal, without the
+// script lock or the spreadsheet, so it never delays queued student signups.
+function bonusLive_() {
+  const values = storageProperties_().getProperties();
+  const meta = values[BONUS_META_] ? JSON.parse(values[BONUS_META_]) : null;
+  if (!meta || values[BONUS_PENDING_]) return {live:null};
+  const prefix = BONUS_SLOT_ + meta.id + ':';
+  const entrants = Object.keys(values).filter(key => key.startsWith(prefix) && values[key] === '1').map(key => Number(key.slice(prefix.length))).sort((a,b) => a-b);
+  return {live:{id:meta.id,open:meta.open,drawn:meta.drawn,entrants:entrants}};
+}
+
+// Round 2 counts a student as presented once the answer sheet has a Question 2
+// mark, or after any round 2 Bonus drawn here (marks are entered later).
+function round2Presented_(state) {
+  const presented = new Set(state.r2Source || []);
+  state.bonus.forEach(b => {if (b.stage === 2) presented.add(b.no);});
+  return presented;
+}
+function question_(value) {
+  if (!Number.isSafeInteger(value) || value < 1 || value > 500) throw Error('Choose a question number from 1 to 500.');
+  return value;
+}
+
+function testSid_(no) {return '1155' + String(no).padStart(6,'0');}
+function sidHash_(salt, sid) {return digest_({salt:salt,sid:sid}).slice(0,24);}
+function maskName_(name) {
+  return name.trim().split(/\s+/).map(word => {
+    const letters = Array.from(word);
+    return letters[0] + '*'.repeat(Math.min(4, Math.max(1, letters.length-1)));
+  }).join(' ');
+}
+function sidStudent_(sid) {
+  const text = storageProperties_().getProperty(SID_INDEX_);
+  if (!text) throw Error('SID sign-up is not set up. Ask the instructor to add you.');
+  const index = JSON.parse(text);
+  const entry = index.entries[sidHash_(index.salt, sid)];
+  if (!entry) throw Error('This SID is not on the Tutorial 3 list. Check it, or ask the instructor to add you.');
+  return {no:entry[0],name:entry[1]};
+}
+// sidByNo: Map of roster No. to SID text. Stores only salted hashes and masked names.
+function saveSidIndex_(roster, sidByNo) {
+  const properties = storageProperties_();
+  let salt = properties.getProperty(SID_SALT_);
+  if (!salt) {salt = loginSecret_();properties.setProperty(SID_SALT_, salt);}
+  const entries = {}, missing = [];
+  roster.forEach(p => {
+    const sid = sidByNo.has(p.no) ? String(sidByNo.get(p.no)).trim() : '';
+    if (!sid) {missing.push(p.no);return;}
+    if (!/^\d{8,12}$/.test(sid)) throw Error('The SID for No. ' + p.no + ' must be 8 to 12 digits.');
+    const hash = sidHash_(salt, sid);
+    if (entries[hash]) throw Error('Two roster numbers share the same SID: No. ' + entries[hash][0] + ' and No. ' + p.no + '.');
+    entries[hash] = [p.no, maskName_(p.name)];
+  });
+  const text = JSON.stringify({version:1,salt:salt,entries:entries});
+  if (text.length > 9000) throw Error('The SID index is too large for one Script Property.');
+  properties.setProperty(SID_INDEX_, text);
+  return {sids:Object.keys(entries).length,missing:missing};
+}
+// Owner-only, run once from the editor. Reads No. and SID from a private tab
+// named 'SID import' (two columns: No., SID) if present, then deletes that tab;
+// otherwise reads the SID column of the original source sheet.
+function importSids() {
+  authenticate_();
+  if (TEST_DEPLOYMENT_ONLY_) throw Error('Test SIDs are created by setupTest.');
+  return locked_(function () {
+    const book = book_(), roster = roster_(), sheet = book.getSheetByName('SID import');
+    let sidByNo;
+    if (sheet) {
+      const rows = sheet.getDataRange().getDisplayValues().slice(1).filter(row => row[0].trim());
+      sidByNo = new Map(rows.map(row => [Number(row[0].trim()), row[1].trim()]));
+    } else sidByNo = sourceSids_();
+    const known = new Set(roster.map(p => p.no));
+    sidByNo.forEach((sid,no) => {if (!known.has(no)) throw Error('No. ' + no + ' is not on the private roster.');});
+    const result = saveSidIndex_(roster, sidByNo);
+    if (sheet) book.deleteSheet(sheet);
+    console.log('SID sign-up ready: ' + result.sids + ' students' + (result.missing.length ? '; missing No. ' + result.missing.join(',') : ''));
+    return result;
+  });
+}
+function sourceSids_() {
+  const sourceId = PropertiesService.getScriptProperties().getProperty('SOURCE_ID');
+  if (!sourceId) throw Error('Add a private tab named "SID import" with columns No. and SID, or set SOURCE_ID.');
+  const sheet = SpreadsheetApp.openById(sourceId).getSheets().find(s => s.getSheetId() === SOURCE_GID_);
+  if (!sheet) throw Error('Tutorial 3 source worksheet was not found.');
+  const firstColumn = sheet.getRange(1,1,Math.min(10,sheet.getLastRow()),1).getDisplayValues();
+  const headerRow = firstColumn.findIndex(row => row[0].trim() === 'No.');
+  if (headerRow < 0) throw Error('The source roster headers were not found.');
+  const header = sheet.getRange(headerRow+1,1,1,sheet.getLastColumn()).getDisplayValues()[0].map(v => v.trim().replace(/\s+/g,''));
+  const column = names => {
+    const index = header.findIndex(value => names.includes(value));
+    if (index < 0) throw Error('No source column named ' + names.join(' / ') + '. Use a "SID import" tab instead.');
+    return index + 1;
+  };
+  const count = sheet.getLastRow() - headerRow - 1;
+  const read = names => sheet.getRange(headerRow+2,column(names),count,1).getDisplayValues().map(r => r[0].trim());
+  const nos = read(['No.']), classes = read(['TutorialClass']), sids = read(['StudentID','SID','StudentNo.','學號','学号']);
+  const result = new Map();
+  nos.forEach((no,i) => {if (/^\d+$/.test(no) && classes[i] === 'Tutorial 3' && sids[i]) result.set(Number(no), sids[i]);});
+  return result;
 }
 
 function sourceRoster_() {
@@ -576,12 +719,19 @@ function cleanState_(input, roster) {
   const bonus = input.bonus.map(b => {
     if (!b || !known.has(b.no)) throw Error('Invalid Bonus result.');
     const id = token_(b.round,'Invalid Bonus round.');
-    const entrants = numbers_(b.entrants,known,false);
-    if (rounds.has(id) || !entrants.includes(b.no)) throw Error('Duplicate or inconsistent Bonus result.');
+    const lottery = b.source === 'lottery';
+    const entrants = numbers_(b.entrants,known,lottery);
+    if (rounds.has(id) || (lottery ? entrants.length : !entrants.includes(b.no))) throw Error('Duplicate or inconsistent Bonus result.');
     rounds.add(id);
-    return {round:id,no:b.no,entrants:entrants,drawnAt:time_(b.drawnAt)};
+    const record = {round:id,no:b.no,entrants:entrants,drawnAt:time_(b.drawnAt)};
+    if (b.stage !== undefined || lottery) {
+      if (b.stage !== 2 || !['volunteer','lottery'].includes(b.source)) throw Error('Invalid round 2 Bonus result.');
+      Object.assign(record,{stage:2,source:b.source,question:question_(b.question),date:date_(b.date)});
+    }
+    return record;
   });
-  return {version:2,students:students,absent:absent,batches:batches,bonus:bonus};
+  const r2Source = input.r2Source === undefined ? [] : numbers_(input.r2Source,known,true).sort((a,b) => a-b);
+  return {version:2,students:students,absent:absent,batches:batches,bonus:bonus,r2Source:r2Source};
 }
 function forwardOnly_(old, next) {
   const previous = new Map(old.students.map(p => [p.no,p]));
@@ -670,9 +820,27 @@ function refreshRecords() {
 }
 function refreshRecords_() {
   const document = read_();
-  syncAttendanceSheet_(book_(), document);
-  const reportsWarning = refreshReports_(book_(), document);
-  return Object.assign({state:document.state,revision:document.revision}, ownerMetadata_(document), reportsWarning ? {reportsWarning:reportsWarning} : {});
+  const sync = syncSourceAnswers_(document);
+  if (sync.changed) {document.revision++;write_(document, false);}
+  return Object.assign({state:document.state,revision:document.revision}, ownerMetadata_(document), sync.warning ? {sourceWarning:sync.warning} : {});
+}
+// The teaching sheet is the record of who has answered: a filled Question 2
+// means the student has presented in round 2. Only flags are kept, never marks.
+// Test storage has no source sheet and keeps its fictional answer list.
+function syncSourceAnswers_(document) {
+  if (TEST_CONTEXT_ || !document.state) return {changed:false,warning:null};
+  let answered;
+  try {
+    answered = sourceRoster_().filter(p => p.q[1]).map(p => p.no);
+  } catch (error) {
+    console.warn('Answer sheet read failed: ' + (error && error.stack || String(error)));
+    return {changed:false,warning:'Could not read the answer sheet; using the last synchronized answers. ' + (error && error.message || '')};
+  }
+  const known = new Set(document.state.students.map(p => p.no));
+  const next = answered.filter(no => known.has(no)).sort((a,b) => a-b);
+  if (JSON.stringify(next) === JSON.stringify(document.state.r2Source || [])) return {changed:false,warning:null};
+  document.state.r2Source = next;
+  return {changed:true,warning:null};
 }
 
 // Explicit, owner-only upgrade: existing human edits have no rendered baseline.
@@ -815,7 +983,12 @@ function syncAttendanceSheet_(book, document) {
     return !before || !sameNumbers_(before.absent,row.absent);
   })) saveAttendanceBaseline_(book,grid);
 }
+// The private readable report tabs are retired; the teaching sheet is the
+// record. Existing tabs are left as an archive and no longer regenerated.
 function refreshReports_(book, document) {
+  return null;
+}
+function refreshReportsRetired_(book, document) {
   try {
     reports_(book, document);
     log_(book, document.state);
@@ -928,7 +1101,8 @@ function reports_(book, document) {
       drawn.add(batch.q+':'+no);
       history.push([no,byNo.get(no).name,document.batchDates[batch.id] || '',index+1,(batch.questionStart || 1)+question,batch.q+1,'课堂讲题',reportTime_(batch.at)]);
     }));
-    document.state.bonus.forEach((bonus,index) => history.push([bonus.no,byNo.get(bonus.no).name,'',index+1,'','','Bonus',reportTime_(bonus.drawnAt)]));
+    document.state.bonus.forEach((bonus,index) => history.push([bonus.no,byNo.get(bonus.no).name,bonus.date || '',index+1,bonus.question || '',bonus.stage === 2 ? 2 : '',
+      bonus.stage === 2 ? (bonus.source === 'volunteer' ? 'Round 2 Bonus · 志愿' : 'Round 2 Bonus · 抽签') : 'Bonus',reportTime_(bonus.drawnAt)]));
   }
   students.forEach(student => student.q.forEach((completed,q) => {
     if (completed && !drawn.has(q+':'+student.no)) history.push([student.no,student.name,'','','',q+1,'历史参与（未记录题目）','']);
@@ -938,10 +1112,12 @@ function reports_(book, document) {
     ['No.','Name','课堂日期','批次序号','题号','参与轮次','类型','保存时间（香港）'], history);
   questionSheet.setColumnWidth(7,190);
   questionSheet.setColumnWidth(8,185);
-  const rosterRows = students.map(p => [p.no,p.name,p.q[0] ? '已参与' : '待参与',p.q[1] ? '已参与' : '待参与',p.q.filter(Boolean).length]);
+  const round2 = new Map();
+  if (document.state) document.state.bonus.forEach(b => {if (b.stage === 2) round2.set(b.no,(round2.get(b.no) || 0)+1);});
+  const rosterRows = students.map(p => [p.no,p.name,p.q[0] ? '已参与' : '待参与',p.q[1] ? '已参与' : '待参与',round2.get(p.no) || 0,p.q[1] || round2.has(p.no) ? '已讲' : '未讲']);
   const rosterSheet = reportSheet_(book, '学生名单', 'Tutorial 3 · 学生名单',
-    '参与次数为两轮课堂参与的合计，包含历史参与。出勤请查看已保存日期的出勤记录。请在网站维护，表格改动会被覆盖。',
-    ['No.','Name','第一轮参与','第二轮参与','参与次数'], rosterRows);
+    '第一轮/第二轮参与为原必答轮次（含历史参与）。第二轮现为自愿Bonus：未讲过第二轮的学生在志愿抽签和补位抽签中优先。请在网站维护，表格改动会被覆盖。',
+    ['No.','Name','第一轮参与','第二轮参与（必答）','第二轮Bonus次数','第二轮状态'], rosterRows);
   [attendanceSheet,questionSheet,rosterSheet].forEach((sheet,index) => {
     book.setActiveSheet(sheet);
     book.moveActiveSheet(index+1);

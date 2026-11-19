@@ -11,8 +11,9 @@ This backend runs as the instructor and stores draws and a roster snapshot in a 
 5. Keep that storage spreadsheet private. Do not clear `STORE_ID` when upgrading an existing project: it points to the saved progress used by both deployments.
 6. Choose **Deploy → New deployment → Web app** for the **admin deployment**. Set **Execute as** to **Me (huhanwj@gmail.com)** and **Who has access** to **Only myself**. Deploy and copy its final `/exec` URL. Open it once in the browser while signed in as this account to complete any Google authorization or access prompts.
 7. Create a second Web app deployment in **the same Apps Script project** for **student registration**. Set **Execute as** to **Me (huhanwj@gmail.com)** and **Who has access** to **Anyone**. Copy its different `/exec` URL. These deployments share script properties, private storage, and the script lock. Do not create a second project or share the storage sheet. If account policy disables anonymous web apps, sign-in-free registration is unavailable under that policy.
-8. Configure the private **admin URL** and public **student URL** in `cloud-config.js`, then open the GitHub draw page and click **Sign in with Google**. The private Google page checks `huhanwj@gmail.com`; click **Continue** to return to the GitHub callback and finish connecting. The draw interface stays on GitHub. Reconnect in settings retries this fixed class connection. The public student bridge carries signed instructor requests as well as Bonus signup, while QR links still point to the GitHub student page. No permanent password or client-supplied email authenticates the instructor. An empty cloud returns roster names and participation flags to the authenticated instructor. Review initial progress, then explicitly initialize the cloud once. Existing cloud progress takes precedence on later connections.
-9. Verify that the admin connection succeeds for `huhanwj@gmail.com` and fails in an anonymous browser or with another account. Verify a complete Bonus round from a phone's private browser window using the student QR code. Students should see the registration form without a Google sign-in or authorization prompt. Close registration on the instructor page before drawing, then reload it to confirm the saved result remains.
+8. **SID sign-up (round 2).** Run **`importSids`** once in the editor as the owner. It reads No. and SID from a private tab named **SID import** in the storage spreadsheet (columns `No.` and `SID`, with a header row), then deletes that tab. If the tab is missing, it reads the SID column (`Student ID` / `SID` / `学号`) of the original Tutorial 3 source sheet via `SOURCE_ID`. Only a salted SHA-256 prefix of each SID, the roster No., and a masked name are kept in the Script Property `SID_INDEX_V1`; the random salt lives in `SID_SALT_V1`. Raw SIDs are not written anywhere. Re-run it after a roster change. Its log lists any roster No. without a SID; those students can be added by roster No. on the instructor page. `setupTest` creates fictional test SIDs `1155000001`–`1155000035`.
+9. Configure the private **admin URL** and public **student URL** in `cloud-config.js`, then open the GitHub draw page and click **Sign in with Google**. The private Google page checks `huhanwj@gmail.com`; click **Continue** to return to the GitHub callback and finish connecting. The draw interface stays on GitHub. Reconnect in settings retries this fixed class connection. The public student bridge carries signed instructor requests as well as Bonus signup, while QR links still point to the GitHub student page. No permanent password or client-supplied email authenticates the instructor. An empty cloud returns roster names and participation flags to the authenticated instructor. Review initial progress, then explicitly initialize the cloud once. Existing cloud progress takes precedence on later connections.
+10. Verify that the admin connection succeeds for `huhanwj@gmail.com` and fails in an anonymous browser or with another account. Verify a complete Bonus round from a phone's private browser window using the student QR code. Students should see the registration form without a Google sign-in or authorization prompt. Close registration on the instructor page before drawing, then reload it to confirm the saved result remains.
 
 For code updates, create a new version and update **both** deployments through **Deploy → Manage deployments → Edit → Version → Deploy**. Each deployment keeps its own `/exec` URL and access setting. Upgrading an old password-based deployment requires updating its code too; an older deployed version keeps its old authentication until replaced or archived. Run `setup` as the owner after updating to remove the obsolete key property. The deployment owner performs these steps; this repository does not deploy the project.
 
@@ -52,13 +53,16 @@ Every private action validates an unexpired owner-minted session before reading 
 | `save` | `state,revision,requestId`; `sessionDate` required for new batches | `{state,revision}` and owner metadata; new draws require that date's saved attendance |
 | `attendanceSave` | `date,absent,revision,requestId` | Saves/corrects attendance for the date; participation unchanged |
 | `recordsRefresh` | — | Saves direct attendance corrections, then refreshes private report tabs; revision advances only if attendance changed |
-| `bonusOpen` | `absent,requestId` | `{room}` |
+| `bonusOpen` | `absent,requestId` (round 2 sends `[]`) | `{room}` |
 | `bonusStatus` | — | `{room}`; room may be `null` |
+| `bonusLive` | — | `{live:{id,open,drawn,entrants}}` or `{live:null}`; reads Script Properties only, no lock |
 | `bonusClose` | `room,requestId` | `{room}` |
+| `bonusAdd` | `room,no,requestId` | `{room}`; manual entry by roster No. |
 | `bonusRemove` | `room,no,requestId` | `{room}` |
-| `bonusDraw` | `room,requestId` | `{state,revision,room}` |
+| `bonusDraw` | `room,question,date,requestId` | `{state,revision,room}`; prefers volunteers who have not presented in round 2 |
 | `bonusReset` | `room,requestId` | `{room:null}` |
-| `bonusJoin` (public) | `room,no` | `{status:'joined',no}` |
+| `round2Lottery` | `no,question,date,skipped,requestId` | `{state,revision}`; rejects a student who already presented while unskipped students who have not presented remain |
+| `bonusJoin` (public) | `room,sid,requestId?` | `{status:'joined',no,name}`; `name` is masked |
 | `bonusInfo` (public) | `room` | `{id,open}` |
 
 `roster` contains `{no,name,q:[boolean,boolean]}`. Each new single-student batch may carry `questionStart` (1–500, including its final question); legacy batches omit it and retain their original numbering. Saved question assignments cannot be rewritten. Version 2 state contains `{version,students,absent,batches,bonus}`; student names are resolved from the private snapshot by the server. An admin room contains `{id,open,entrants:[number],winner:null|{no,name},absent:[number],drawnAt:null|ISO}`. The student endpoints never return the roster or registration list. Students self-report a roster number; this does not authenticate their identity. Duplicate numbers count once, and the instructor can remove an erroneous entry before drawing.
@@ -98,3 +102,19 @@ Report refresh follows a successful canonical commit. If it fails, the response 
 Keep the admin deployment set to **Only myself**, the student deployment set to **Anyone**, and both set to execute as `huhanwj@gmail.com`. Google account access controls protect the instructor session. Never make the private storage spreadsheet public.
 
 Public registration responses contain no winner/name or duplicate flag. Public payloads use a UUID room identifier and only `room`, `no`, and optional `requestId`; malformed inputs are rejected before acquiring the shared script lock. Unexpected registration errors are logged on the server and replaced with a generic public message. Admin identity failures do not disclose the allowlisted address. Keep setup and management access restricted; do not publish Script Properties. An existing private Roster needs no SOURCE_ID property and setup never replaces it.
+
+## Round 2 records and signup concurrency
+
+Round 2 Bonus results are appended to `state.bonus` with `stage:2`, `source:'volunteer'|'lottery'`, `question`, and `date`. Lottery records have no entrants. A student counts as presented in round 2 if their old `Turn2` flag is true or they have any `stage:2` record. **讲题记录** lists these records as *Round 2 Bonus · 志愿/抽签*, and **学生名单** adds a round 2 Bonus count and status.
+
+`bonusJoin` resolves the SID against `SID_INDEX_V1` before taking the script lock. Under the lock it reads the room metadata and the student's slot and writes one property, then releases. Signups wait up to 20 s (`SIGNUP_WAIT_MS_`) for the lock instead of 2 s. The instructor page polls `bonusLive` without the lock while registration is open, so polling no longer competes with signups. Apps Script still limits a user to 30 simultaneous executions, which covers a class of about 20 to 30 scanning at once. Run the load test on the test deployment to measure real latency.
+
+Upgrade both deployments to the same version before opening round 2 sign-ups. Old student pages that send `no` instead of `sid` are rejected as invalid.
+
+## Answer-sheet sync (round 2)
+
+`syncSourceAnswers_` reads No., Tutorial Class and Question 1/Question 2 from the `SOURCE_ID` sheet (worksheet gid `521726463`), keeps only the roster numbers whose Question 2 is filled, and stores them as `state.r2Source`. It runs on `load`, `recordsRefresh`, and before `bonusDraw` and `round2Lottery`. Production needs the `SOURCE_ID` Script Property; test storage skips the sync. A read failure returns `sourceWarning` and keeps the previous list. The old Q1/Q2 flags in the private state no longer affect round 2 priority.
+
+`refreshReports_` is now a no-op: the readable report tabs are retired and kept only as an archive. Attendance-sheet synchronization no longer runs on load or draws.
+
+Deployments are managed with clasp from a scratch clone. The admin deployment uses a version whose manifest sets `webapp.access` to `MYSELF`. The student and test deployments use `ANYONE_ANONYMOUS`. The test version is built with `TEST_DEPLOYMENT_ONLY_ = true`.
