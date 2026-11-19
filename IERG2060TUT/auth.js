@@ -1,4 +1,4 @@
-import {cloudDefaults, testMode as configuredTestMode} from './cloud-config.js?v=9';
+import {cloudDefaults, testMode as configuredTestMode} from './cloud-config.js?v=10';
 
 const AUTH_ORIGIN = 'https://huhanwj.github.io';
 // One backend serves every group; a session lists the groups it may open.

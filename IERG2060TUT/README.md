@@ -1,8 +1,8 @@
-# The Draw — IERG2060 Tutorial 3
+# The Draw — IERG2060 tutorials
 
-Tutorial 3 is the fixed teaching group, one of four tutorial groups; it is not a class date or a participation round.
+The page serves Tutorial 1–4; the start page asks for the group, then Google sign-in. Each group is a fixed teaching group, not a class date or a participation round.
 
-A student-facing random draw at `/ierg2060-t3/`. It is unlinked from the homepage and marked noindex. There is no grading, score display, or SID display. Attendance and participation reports live in the private Google spreadsheet.
+A student-facing random draw at `/IERG2060TUT/` (formerly `/ierg2060-t3/`, which now redirects). It is unlinked from the homepage and marked noindex. There is no grading, score display, or SID display. Attendance and participation reports live in the private Google spreadsheet.
 
 ## Round 2 · voluntary Bonus
 

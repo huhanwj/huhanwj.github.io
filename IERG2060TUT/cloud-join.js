@@ -1,5 +1,5 @@
 import {createCloudClient} from './cloud.js?v=11';
-import {cloudDefaults, groupId, testMode, browserStateKey} from './cloud-config.js?v=9';
+import {cloudDefaults, groupId, testMode, browserStateKey} from './cloud-config.js?v=10';
 
 document.getElementById('test-banner').hidden = !testMode;
 if (testMode) document.title = 'TEST · Bonus registration';

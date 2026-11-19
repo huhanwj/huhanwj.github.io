@@ -218,7 +218,7 @@ function doGet(e) {
     const grant = {state:state,email:OWNER_EMAIL_,expiresAt:Date.now()+300000};
     CacheService.getScriptCache().put(loginCacheKey_('grant', code), JSON.stringify(grant), 300);
     const template = HtmlService.createTemplateFromFile('SignIn');
-    template.continueUrl = 'https://huhanwj.github.io/ierg2060-t3/auth-callback.html#code=' + code + '&state=' + state;
+    template.continueUrl = 'https://huhanwj.github.io/IERG2060TUT/auth-callback.html#code=' + code + '&state=' + state;
     return template.evaluate().setTitle('IERG2060 sign in').addMetaTag('viewport', 'width=device-width, initial-scale=1');
   }
   if (!e || !e.parameter || !e.parameter.channel) {

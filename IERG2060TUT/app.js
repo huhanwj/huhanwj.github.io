@@ -1,7 +1,7 @@
 import {validateState, round2Presented, lotteryPool, pick, validDate} from './core.js?v=11';
 import {createCloudClient} from './cloud.js?v=11';
 import {readSession, beginSignIn, cancelSignIn, clearSession, saveSession, renderGoogleButton} from './auth.js?v=3';
-import {cloudDefaults, groupId, googleClientId, testMode, browserStateKey, pageQuery} from './cloud-config.js?v=9';
+import {cloudDefaults, groupId, groupChoices, groupChosen, googleClientId, testMode, browserStateKey, pageQuery} from './cloud-config.js?v=10';
 
 // Round 2 is voluntary Bonus: volunteers sign up by SID, the server draws one
 // (preferring students who have not presented in round 2), and a lottery among
@@ -171,6 +171,7 @@ function renderQuestion(p,number){
   if($('question-image').getAttribute('src')!==src){$('question-image').src=src;$('question-image').alt=`Question ${number}`;}
 }
 function render(){
+  if(!groupChosen)return;
   schedulePoll();
   const p=phase(),locked=busy||connecting||revealing||!!pending||!connected;
   document.body.classList.toggle('wide',p==='open'||p==='result');
@@ -414,9 +415,22 @@ async function activate(){
   else notice('');
   render();
 }
+// The start page lists the groups; each card opens that group's page.
+if(!groupChosen){
+  document.body.classList.add('picking');
+  $('group-picker').hidden=false;
+  showGroup('Choose your group');
+  $('group-list').replaceChildren(...groupChoices.map(choice=>{
+    const link=document.createElement('a'),title=document.createElement('strong'),action=document.createElement('span');
+    link.className='group-card';link.href=`?${pageQuery(choice.id)}`;
+    title.textContent=choice.label;action.textContent='Open →';
+    link.append(title,action);return link;
+  }));
+}
 render();
-loadQuestionSets();
-if(navigator.locks)navigator.locks.request(TAB_LOCK,{ifAvailable:true},async lock=>{
+if(groupChosen)loadQuestionSets();
+if(!groupChosen){/* Nothing connects until a group is chosen. */}
+else if(navigator.locks)navigator.locks.request(TAB_LOCK,{ifAvailable:true},async lock=>{
   if(!lock){notice('Close the other draw page, then reload this one.',true);return;}
   try{await activate();}catch(error){notice(`Could not connect: ${error.message}`,true);render();}
   await new Promise(()=>{});
