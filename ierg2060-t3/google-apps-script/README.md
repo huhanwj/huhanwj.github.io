@@ -115,6 +115,6 @@ Upgrade both deployments to the same version before opening round 2 sign-ups. Ol
 
 `syncSourceAnswers_` reads No., Tutorial Class and Question 1/Question 2 from the `SOURCE_ID` sheet (worksheet gid `521726463`), keeps only the roster numbers whose Question 2 is filled, and stores them as `state.r2Source`. It runs on `load`, `recordsRefresh`, and before `bonusDraw` and `round2Lottery`. Production needs the `SOURCE_ID` Script Property; test storage skips the sync. A read failure returns `sourceWarning` and keeps the previous list. The old Q1/Q2 flags in the private state no longer affect round 2 priority.
 
-`refreshReports_` is now a no-op: the readable report tabs are retired and kept only as an archive. Attendance-sheet synchronization no longer runs on load or draws.
+`sourceRecords_` reads No., Student ID, Name, Tutorial Class and Question 1/Question 2 once per execution. `refreshReports_` rebuilds only **学生名单** (No., SID, Name, Question 1/2 filled, website round 2 draws, round 2 status) after `bonusDraw`, `round2Lottery` and `recordsRefresh`, and deletes the retired **出勤记录** and **讲题记录** tabs. SIDs appear only in this private tab; Script Properties still hold only salted hashes. Attendance-sheet synchronization no longer runs; `setupAttendanceEditing` is obsolete.
 
 Deployments are managed with clasp from a scratch clone. The admin deployment uses a version whose manifest sets `webapp.access` to `MYSELF`. The student and test deployments use `ANYONE_ANONYMOUS`. The test version is built with `TEST_DEPLOYMENT_ONLY_ = true`.

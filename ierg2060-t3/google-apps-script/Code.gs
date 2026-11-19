@@ -83,7 +83,6 @@ function setupTest_() {
   if (roster.length !== 35 || roster.some((p,i) => p.no !== i+1 || p.name !== 'Test Student ' + String(i+1).padStart(2,'0') || p.q.some(Boolean))) throw Error('The test roster must contain exactly the 35 fictional students.');
   const document = read_();
   if (!document.state) throw Error('The test state is missing. Recover the test spreadsheet without resetting production.');
-  syncAttendanceSheet_(book, document);
   refreshNames_(document.state,roster);
   // Fictional SIDs 1155000001-1155000035 match Test Student 01-35.
   saveSidIndex_(roster, new Map(roster.map(p => [p.no,testSid_(p.no)])));
@@ -133,7 +132,6 @@ function setup_() {
   }
   roster_();
   const document = read_();
-  syncAttendanceSheet_(book, document);
   const reportsWarning = refreshReports_(book, document);
   console.log('Private storage: ' + storageUrl_());
   return Object.assign(ownerMetadata_(document), reportsWarning ? {reportsWarning:reportsWarning} : {});
@@ -594,9 +592,14 @@ function importSids() {
     return result;
   });
 }
-function sourceSids_() {
+// Reads the Tutorial 3 rows of the teaching sheet once per execution: No.,
+// SID, Name, and whether Question 1 / Question 2 are filled. Marks themselves
+// are never kept.
+let SOURCE_RECORDS_ = null;
+function sourceRecords_() {
+  if (SOURCE_RECORDS_) return SOURCE_RECORDS_;
   const sourceId = PropertiesService.getScriptProperties().getProperty('SOURCE_ID');
-  if (!sourceId) throw Error('Add a private tab named "SID import" with columns No. and SID, or set SOURCE_ID.');
+  if (!sourceId) throw Error('Set the SOURCE_ID script property to the teaching sheet.');
   const sheet = SpreadsheetApp.openById(sourceId).getSheets().find(s => s.getSheetId() === SOURCE_GID_);
   if (!sheet) throw Error('Tutorial 3 source worksheet was not found.');
   const firstColumn = sheet.getRange(1,1,Math.min(10,sheet.getLastRow()),1).getDisplayValues();
@@ -605,15 +608,20 @@ function sourceSids_() {
   const header = sheet.getRange(headerRow+1,1,1,sheet.getLastColumn()).getDisplayValues()[0].map(v => v.trim().replace(/\s+/g,''));
   const column = names => {
     const index = header.findIndex(value => names.includes(value));
-    if (index < 0) throw Error('No source column named ' + names.join(' / ') + '. Use a "SID import" tab instead.');
+    if (index < 0) throw Error('No source column named ' + names.join(' / ') + '.');
     return index + 1;
   };
   const count = sheet.getLastRow() - headerRow - 1;
+  if (count < 1) throw Error('The source roster is empty.');
   const read = names => sheet.getRange(headerRow+2,column(names),count,1).getDisplayValues().map(r => r[0].trim());
-  const nos = read(['No.']), classes = read(['TutorialClass']), sids = read(['StudentID','SID','StudentNo.','學號','学号']);
-  const result = new Map();
-  nos.forEach((no,i) => {if (/^\d+$/.test(no) && classes[i] === 'Tutorial 3' && sids[i]) result.set(Number(no), sids[i]);});
-  return result;
+  const nos = read(['No.']), names = read(['Name']), classes = read(['TutorialClass']), q1 = read(['Question1']), q2 = read(['Question2']);
+  const sids = read(['StudentID','SID','StudentNo.','學號','学号']);
+  SOURCE_RECORDS_ = nos.map((no,i) => ({no:/^\d+$/.test(no) ? Number(no) : 0,sid:sids[i],name:names[i],q:[!!q1[i],!!q2[i]],className:classes[i]}))
+    .filter(p => p.no > 0 && p.className === 'Tutorial 3').map(p => ({no:p.no,sid:p.sid,name:p.name,q:p.q}));
+  return SOURCE_RECORDS_;
+}
+function sourceSids_() {
+  return new Map(sourceRecords_().filter(p => p.sid).map(p => [p.no,p.sid]));
 }
 
 function sourceRoster_() {
@@ -821,8 +829,11 @@ function refreshRecords() {
 function refreshRecords_() {
   const document = read_();
   const sync = syncSourceAnswers_(document);
-  if (sync.changed) {document.revision++;write_(document, false);}
-  return Object.assign({state:document.state,revision:document.revision}, ownerMetadata_(document), sync.warning ? {sourceWarning:sync.warning} : {});
+  let reportsWarning;
+  if (sync.changed) {document.revision++;reportsWarning=write_(document, true);}
+  else reportsWarning=refreshReports_(book_(), document);
+  const warning = [sync.warning, reportsWarning].filter(Boolean).join(' ');
+  return Object.assign({state:document.state,revision:document.revision}, ownerMetadata_(document), warning ? {sourceWarning:warning} : {});
 }
 // The teaching sheet is the record of who has answered: a filled Question 2
 // means the student has presented in round 2. Only flags are kept, never marks.
@@ -831,7 +842,7 @@ function syncSourceAnswers_(document) {
   if (TEST_CONTEXT_ || !document.state) return {changed:false,warning:null};
   let answered;
   try {
-    answered = sourceRoster_().filter(p => p.q[1]).map(p => p.no);
+    answered = sourceRecords_().filter(p => p.q[1]).map(p => p.no);
   } catch (error) {
     console.warn('Answer sheet read failed: ' + (error && error.stack || String(error)));
     return {changed:false,warning:'Could not read the answer sheet; using the last synchronized answers. ' + (error && error.message || '')};
@@ -983,12 +994,7 @@ function syncAttendanceSheet_(book, document) {
     return !before || !sameNumbers_(before.absent,row.absent);
   })) saveAttendanceBaseline_(book,grid);
 }
-// The private readable report tabs are retired; the teaching sheet is the
-// record. Existing tabs are left as an archive and no longer regenerated.
 function refreshReports_(book, document) {
-  return null;
-}
-function refreshReportsRetired_(book, document) {
   try {
     reports_(book, document);
     log_(book, document.state);
@@ -996,7 +1002,7 @@ function refreshReportsRetired_(book, document) {
     return null;
   } catch (error) {
     console.warn('Private record display refresh failed: ' + (error && error.stack || String(error)));
-    return 'Cloud progress is saved. The readable record sheets could not refresh; use Refresh records to retry.';
+    return 'Saved. The 学生名单 sheet could not refresh; use Re-read answer sheet to retry.';
   }
 }
 function reportTime_(value) {
@@ -1032,99 +1038,47 @@ function reportSheet_(book, name, title, note, headers, rows) {
   sheet.showSheet();
   return sheet;
 }
-function attendanceReport_(book, document, students) {
-  let sheet = book.getSheetByName('出勤记录');
-  const snapshot = attendanceSnapshot_(document), baseline = attendanceBaseline_(book,document);
-  let grid;
-  if (sheet) {
-    if (!baseline) throw Error('Run owner-only setupAttendanceEditing() before refreshing the existing attendance sheet.');
-    grid = attendanceGrid_(book,document,baseline);
-    // A human may have edited after the pre-save import. Keep those cells for
-    // the next authenticated synchronization instead of erasing them here.
-    if (attendanceSheetChanges_(document,baseline,grid).length) throw Error('Attendance was edited during refresh. Reload to save the Sheet corrections.');
-  } else {
-    if (baseline) throw Error('The editable attendance sheet is missing. Restore it from the private backup.');
-    const rows = students.map(p => [p.no,p.name,0,0].concat(snapshot.attendance.map(row => row.absent.includes(p.no) ? '缺席' : '到场')));
-    sheet = reportSheet_(book,'出勤记录','Tutorial 3 · 出勤记录','',
-      ['No.','Name','到场次数','缺席次数'].concat(snapshot.attendance.map(row => row.date)),rows);
-    grid={version:1,numbers:students.map(p => p.no),names:students.map(p => p.name),attendance:snapshot.attendance};
-  }
-  const names = new Map(students.map(p => [p.no,p.name]));
-  const dates = grid.attendance.map(row => row.date);
-  snapshot.attendance.forEach(row => {if (!dates.includes(row.date)) dates.push(row.date);});
-  if (sheet.getMaxColumns() < dates.length+4) sheet.insertColumnsAfter(sheet.getMaxColumns(),dates.length+4-sheet.getMaxColumns());
-  sheet.getRange(2,1).setValue('可直接修改日期列的到场/缺席；次数自动计算。重新加载网站或刷新记录时保存更正。请保留全部学生和日期。');
-  dates.forEach((date,column) => {
-    if (grid.attendance.some(row => row.date === date)) return;
-    const current = snapshot.attendance.find(row => row.date === date);
-    sheet.getRange(4,column+5).setNumberFormat('@');
-    // Add a complete dated column in one operation, so a retry need not infer
-    // attendance from an empty column left between header and body writes.
-    sheet.getRange(4,column+5,grid.numbers.length+1,1).setValues([[date]].concat(grid.numbers.map(no => [current.absent.includes(no) ? '缺席' : '到场'])));
-  });
-  grid.numbers.forEach((no,index) => {
-    const rowIndex = index+5, name = names.get(no);
-    if (grid.names[index] !== name) sheet.getRange(rowIndex,2).setValue(typeof name === 'string' && /^[=+\-@]/.test(name) ? "'"+name : name);
-    dates.forEach((date,column) => {
-      const current = snapshot.attendance.find(row => row.date === date);
-      const previous = grid.attendance.find(row => row.date === date);
-      const absent = current.absent.includes(no);
-      if (previous && previous.absent.includes(no) !== absent) sheet.getRange(rowIndex,column+5).setValue(absent ? '缺席' : '到场');
-    });
-  });
-  if (grid.numbers.length) {
-    const end = attendanceColumn_(dates.length+4);
-    sheet.getRange(5,3,grid.numbers.length,2).setFormulas(grid.numbers.map((no,index) => dates.length ?
-      ['=COUNTIF(E'+(index+5)+':'+end+(index+5)+',"到场")','=COUNTIF(E'+(index+5)+':'+end+(index+5)+',"缺席")'] : ['=0','=0']));
-    if (dates.length) sheet.getRange(5,5,grid.numbers.length,dates.length).setBackgrounds(grid.numbers.map(no => dates.map(date => snapshot.attendance.find(row => row.date === date).absent.includes(no) ? '#fde8df' : '#e6f2ed')));
-  }
-  // Advance the baseline only after all attendance cells were written. If any
-  // write fails, the old baseline still distinguishes stale cells from edits.
-  SpreadsheetApp.flush();
-  saveAttendanceBaseline_(book,snapshot);
-  return sheet;
-}
 function attendanceColumn_(column) {
   let name = '';
   while (column) {column--;name=String.fromCharCode(65+column%26)+name;column=Math.floor(column/26);}
   return name;
 }
+// The private spreadsheet keeps one readable tab, 学生名单: SID and name from
+// the teaching sheet, whether Question 1 / Question 2 are filled there, and
+// the round 2 Bonus draws made on the website. Attendance and the per-question
+// log are retired; their data stays in State.
 function reports_(book, document) {
   const roster = roster_();
   const students = document.state ? document.state.students : roster;
   if (document.state) refreshNames_(document.state, roster);
-  const byNo = new Map(students.map(p => [p.no,p]));
-  const attendanceSheet = attendanceReport_(book,document,students);
-  const history = [], drawn = new Set();
-  if (document.state) {
-    document.state.batches.forEach((batch,index) => batch.numbers.forEach((no,question) => {
-      drawn.add(batch.q+':'+no);
-      history.push([no,byNo.get(no).name,document.batchDates[batch.id] || '',index+1,(batch.questionStart || 1)+question,batch.q+1,'课堂讲题',reportTime_(batch.at)]);
-    }));
-    document.state.bonus.forEach((bonus,index) => history.push([bonus.no,byNo.get(bonus.no).name,bonus.date || '',index+1,bonus.question || '',bonus.stage === 2 ? 2 : '',
-      bonus.stage === 2 ? (bonus.source === 'volunteer' ? 'Round 2 Bonus · 志愿' : 'Round 2 Bonus · 抽签') : 'Bonus',reportTime_(bonus.drawnAt)]));
-  }
-  students.forEach(student => student.q.forEach((completed,q) => {
-    if (completed && !drawn.has(q+':'+student.no)) history.push([student.no,student.name,'','','',q+1,'历史参与（未记录题目）','']);
-  }));
-  const questionSheet = reportSheet_(book, '讲题记录', 'Tutorial 3 · 讲题记录',
-    '课堂日期仅来自网站明确保存的日期。历史参与没有日期、批次或题目分配；保存时间为香港时间。请在网站维护，表格改动会被覆盖。',
-    ['No.','Name','课堂日期','批次序号','题号','参与轮次','类型','保存时间（香港）'], history);
-  questionSheet.setColumnWidth(7,190);
-  questionSheet.setColumnWidth(8,185);
-  const round2 = new Map();
-  if (document.state) document.state.bonus.forEach(b => {if (b.stage === 2) round2.set(b.no,(round2.get(b.no) || 0)+1);});
-  const rosterRows = students.map(p => [p.no,p.name,p.q[0] ? '已参与' : '待参与',p.q[1] ? '已参与' : '待参与',round2.get(p.no) || 0,p.q[1] || round2.has(p.no) ? '已讲' : '未讲']);
-  const rosterSheet = reportSheet_(book, '学生名单', 'Tutorial 3 · 学生名单',
-    '第一轮/第二轮参与为原必答轮次（含历史参与）。第二轮现为自愿Bonus：未讲过第二轮的学生在志愿抽签和补位抽签中优先。请在网站维护，表格改动会被覆盖。',
-    ['No.','Name','第一轮参与','第二轮参与（必答）','第二轮Bonus次数','第二轮状态'], rosterRows);
-  [attendanceSheet,questionSheet,rosterSheet].forEach((sheet,index) => {
-    book.setActiveSheet(sheet);
-    book.moveActiveSheet(index+1);
+  let source = new Map();
+  if (TEST_CONTEXT_) students.forEach(p => source.set(p.no,{sid:testSid_(p.no),q:p.q}));
+  else source = new Map(sourceRecords_().map(p => [p.no,p]));
+  const bonus = new Map();
+  (document.state ? document.state.bonus : []).filter(b => b.stage === 2).forEach(b => {
+    bonus.set(b.no,(bonus.get(b.no) || []).concat(b.date + ' Q' + b.question + ' ' + (b.source === 'volunteer' ? '志愿' : '抽签')));
   });
-  ['State','Roster','Draw log'].forEach(name => {
-    const sheet=book.getSheetByName(name);
-    if (sheet) sheet.hideSheet();
+  const presented = document.state ? round2Presented_(document.state) : new Set();
+  const rows = students.map(p => {
+    const answer = source.get(p.no) || {sid:'',q:[false,false]};
+    const draws = bonus.get(p.no) || [];
+    return [p.no,answer.sid,p.name,answer.q[0] ? '已讲' : '未讲',answer.q[1] ? '已录分' : '',draws.length,draws.join('；'),presented.has(p.no) ? '已讲' : '未讲'];
   });
-  book.setActiveSheet(attendanceSheet);
+  const sheet = reportSheet_(book, '学生名单', 'Tutorial 3 · 学生名单',
+    '第一轮/第二轮（答题表）来自答题表 Question 1 / Question 2 是否有分数。网站抽中记录为第二轮 Bonus 的抽中日期、题号和方式。第二轮状态：答题表已录分或网站已抽中即为已讲。本表由网站生成，改动会被覆盖。',
+    ['No.','SID','Name','第一轮（Question 1）','第二轮（Question 2）','网站抽中次数','网站抽中记录','第二轮状态'], rows);
+  sheet.setFrozenColumns(3);
+  sheet.setColumnWidth(2,120);
+  sheet.setColumnWidth(3,220);
+  sheet.setColumnWidth(7,300);
+  book.setActiveSheet(sheet);
+  book.moveActiveSheet(1);
+  ['出勤记录','讲题记录'].forEach(name => {
+    const old = book.getSheetByName(name);
+    if (old) book.deleteSheet(old);
+  });
+  ['State','Roster','Draw log','Attendance sync'].forEach(name => {
+    const hidden = book.getSheetByName(name);
+    if (hidden) hidden.hideSheet();
+  });
 }
