@@ -334,6 +334,7 @@ async function activate(){
   if(testMode&&!cloudDefaults.student)throw Error('The separate Google test connection is not deployed yet.');
   if(readSession())await connectOwner();
   else notice('Sign in with Google to load this class.');
+  render();
 }
 render();
 if(navigator.locks)navigator.locks.request(TAB_LOCK,{ifAvailable:true},async lock=>{
