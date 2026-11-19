@@ -1,4 +1,4 @@
-import {testMode as configuredTestMode} from './cloud-config.js?v=10';
+import {testMode as configuredTestMode} from './cloud-config.js?v=11';
 
 // Apps Script's HTML bridge handles Google requests without cross-origin fetch.
 export function cloudEndpoint(value) {

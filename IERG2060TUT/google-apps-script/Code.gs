@@ -4,7 +4,7 @@
 // "Groups" tab of the Tutorial 3 storage spreadsheet.
 const OWNER_EMAIL_ = 'huhanwj@gmail.com';
 // The public OAuth Web client ID used by "Sign in with Google" on the site.
-const OAUTH_CLIENT_ID_ = '';
+const OAUTH_CLIENT_ID_ = '640283797508-j4moo4ih67u53nhpfp88mqeu47ctn3if.apps.googleusercontent.com';
 const GROUP_ID_ = /^[a-z0-9]{1,16}$/;
 const GROUPS_SHEET_ = 'Groups';
 const GROUP_HEADERS_ = ['Group ID','Label','Tutorial Class','Answer sheet gid','TA emails'];

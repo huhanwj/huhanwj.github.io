@@ -1,7 +1,7 @@
 import {validateState, round2Presented, lotteryPool, pick, validDate} from './core.js?v=11';
 import {createCloudClient} from './cloud.js?v=11';
 import {readSession, beginSignIn, cancelSignIn, clearSession, saveSession, renderGoogleButton} from './auth.js?v=3';
-import {cloudDefaults, groupId, groupChoices, groupChosen, googleClientId, testMode, browserStateKey, pageQuery} from './cloud-config.js?v=10';
+import {cloudDefaults, groupId, groupChoices, groupChosen, googleClientId, testMode, browserStateKey, pageQuery} from './cloud-config.js?v=11';
 
 // Round 2 is voluntary Bonus: volunteers sign up by SID, the server draws one
 // (preferring students who have not presented in round 2), and a lottery among

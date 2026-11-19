@@ -8,7 +8,7 @@ export const endpoints = {
 };
 // OAuth Web client ID for "Sign in with Google" (public). Empty keeps the
 // original owner-only sign-in window.
-export const googleClientId = '';
+export const googleClientId = '640283797508-j4moo4ih67u53nhpfp88mqeu47ctn3if.apps.googleusercontent.com';
 
 // Groups offered on the start page. The backend's Groups tab decides who may
 // open each one.
