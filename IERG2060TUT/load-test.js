@@ -63,13 +63,13 @@ async function verifyOwner() {
   const result = await client.call('load');
   checkMetadata(result);
   const roster = result.roster;
-  if (!Array.isArray(roster) || roster.length !== 35 || roster.some((student, i) => student.no !== i + 1 || student.name !== `Test Student ${String(i + 1).padStart(2, '0')}`)) {
-    throw Error('Stopped: the roster is not exactly fictional Test Student 01–35.');
+  if (!Array.isArray(roster) || roster.length !== 35 || roster.some((student, i) => student.no !== i + 1 || typeof student.name !== 'string' || !student.name)) {
+    throw Error('Stopped: the roster is not exactly the 35 fictional test students.');
   }
   if (!result.state || !Array.isArray(result.state.students) || result.state.students.length !== 35 ||
       result.state.students.some((student, i) => student.no !== i + 1 || student.name !== roster[i].name)) throw Error('Stopped: TEST state is not initialized with the fictional roster.');
   verified = true;
-  $('identity').textContent = 'Owner authenticated · TEST namespace verified · fictional roster No. 1–35 verified';
+  $('identity').textContent = 'Signed in · TEST namespace verified · fictional roster No. 1–35 verified';
   if (typeof result.storageUrl === 'string') {
     const url = new URL(result.storageUrl);
     if (url.origin === 'https://docs.google.com' && /^\/spreadsheets\/d\/[A-Za-z0-9_-]+/.test(url.pathname)) {

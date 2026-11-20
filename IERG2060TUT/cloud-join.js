@@ -155,7 +155,7 @@ const params = new URLSearchParams(location.hash.slice(1));
     if (event.source !== window.parent || event.origin !== location.origin || !data || data.type !== 'ierg2060-loadtest-submit' || data.runId !== harnessRun || data.clientId !== harnessClient) return;
     const no = parseNo(data.no);
     if (no === null || no > 35) return;
-    // Fictional test SIDs 1155000001-1155000035 map to Test Student 01-35.
+    // Fictional test SIDs 1155000001-1155000035 map to test students No. 1-35.
     const sid = '1155' + String(no).padStart(6, '0');
     if (accepted !== null) {report('confirmed', {no:accepted.no,totalMs:0,pending:false,restored:true});return;}
     if (busy || suspended || closed || (attempt && attempt.sid !== sid)) {report('error', {no,pending:!!attempt,message:'This student page already has a different or active registration.'});return;}

@@ -114,6 +114,18 @@ function storeId_() {
   return id;
 }
 
+// Made-up names for the 35 test students; No. n signs up with SID 11550000nn.
+const TEST_NAMES_ = [
+  'CHAN, Ching Ming 陳晴明', 'CHAN, Hei Chun 陳希俊', 'CHEUNG, Kit Long 張傑朗', 'CHEUNG, Sum Yee 張心怡',
+  'CHEUNG, Yan Hoi 張欣凱', 'FUNG, Pui Ho 馮珮浩', 'HO, Yu Yan 何宇欣', 'KWOK, Ching Yu 郭晴宇', 'KWOK, Ming Hin 郭明軒',
+  'KWOK, Sze Ching 郭詩晴', 'LAI, Fai Pui 黎輝珮', 'LAI, Yu Yee 黎宇怡', 'LAM, Hoi Sum 林凱心', 'LAM, Ming Ho 林明浩',
+  'LEE, Wai Ka 李偉嘉', 'LEUNG, Chun Yee 梁俊怡', 'LEUNG, Hei Pui 梁希珮', 'LIU, Yichen 劉奕辰', 'MAK, Sum Ching 麥心晴',
+  'MAK, Ting Long 麥婷朗', 'MAK, Yan Tsz 麥欣子', 'NG, Kit Long 吳傑朗', 'NG, Wai Kit 吳偉傑', 'SO, Ming Yu 蘇明宇',
+  'SUN, Junhao 孫俊豪', 'SUN, Mingze 孫明澤', 'SUN, Xinyi 孫欣怡', 'SUN, Zihan 孫子涵', 'TSANG, Wai Wing 曾偉詠',
+  'WONG, Kit Sze 黃傑詩', 'YEUNG, Fai Lok 楊輝樂', 'YIP, Fai Ming 葉輝明', 'ZHANG, Yichen 張奕辰', 'ZHAO, Junhao 趙俊豪',
+  'ZHAO, Xinyi 趙欣怡'
+];
+
 // Run only as the signed-in owner from the editor. Re-running keeps test draws.
 function setupTest() {
   authenticate_();
@@ -124,7 +136,7 @@ function setupTest_() {
   let id = properties.getProperty('STORE_ID');
   if (!id) {
     const book = SpreadsheetApp.create('IERG2060 Tutorial 3 — TEST — 35 fictional students');
-    const roster = Array.from({length:35},(_,i) => ({no:i+1,name:'Test Student ' + String(i+1).padStart(2,'0'),q:[false,false]}));
+    const roster = Array.from({length:35},(_,i) => ({no:i+1,name:TEST_NAMES_[i],q:[false,false]}));
     const document = {revision:0,state:{version:2,students:roster,absent:[],batches:[],bonus:[]},room:null,requests:[],attendance:[],batchDates:{}};
     book.getSheets()[0].setName('State');
     book.getSheetByName('State').getRange('A1').setValue(JSON.stringify(document));
@@ -138,12 +150,20 @@ function setupTest_() {
     properties.setProperty('STORE_ID',id);
   }
   // A manually misconfigured test pointer cannot read or modify live storage.
-  const book = book_(), roster = roster_();
-  if (roster.length !== 35 || roster.some((p,i) => p.no !== i+1 || p.name !== 'Test Student ' + String(i+1).padStart(2,'0') || p.q.some(Boolean))) throw Error('The test roster must contain exactly the 35 fictional students.');
+  const book = book_();
+  let roster = roster_();
+  const fictional = (p,i,name) => p.no === i+1 && p.name === name && !p.q.some(Boolean);
+  if (roster.length === 35 && roster.every((p,i) => fictional(p,i,'Test Student ' + String(i+1).padStart(2,'0')))) {
+    // Older test spreadsheets used "Test Student NN" placeholders.
+    book.getSheetByName('Roster').getRange(2,2,35,1).setValues(TEST_NAMES_.map(name => ["'" + name]));
+    SpreadsheetApp.flush();
+    roster = roster_();
+  }
+  if (roster.length !== 35 || !roster.every((p,i) => fictional(p,i,TEST_NAMES_[i]))) throw Error('The test roster must contain exactly the 35 fictional students.');
   const document = read_();
   if (!document.state) throw Error('The test state is missing. Recover the test spreadsheet without resetting production.');
   refreshNames_(document.state,roster);
-  // Fictional SIDs 1155000001-1155000035 match Test Student 01-35.
+  // Fictional SIDs 1155000001-1155000035 match test students No. 1-35.
   saveSidIndex_(roster, new Map(roster.map(p => [p.no,testSid_(p.no)])));
   const reportsWarning = refreshReports_(book,document);
   console.log('Test storage: ' + storageUrl_());
