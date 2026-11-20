@@ -1,6 +1,6 @@
 import {createCloudClient} from './cloud.js?v=11';
-import {cloudDefaults, testMode} from './cloud-config.js?v=11';
-import {readSession, beginSignIn} from './auth.js?v=3';
+import {cloudDefaults, googleClientId, testMode} from './cloud-config.js?v=11';
+import {readSession, saveSession, renderGoogleButton} from './auth.js?v=3';
 
 const $ = id => document.getElementById(id);
 const mode = {testMode: true};
@@ -15,7 +15,6 @@ function show(message, state = '') { $('status').textContent = message; $('statu
 function controls() {
   $('start').disabled = !activeMode || !verified || working || !!pending;
   $('verify').disabled = !activeMode || working;
-  $('signin').disabled = !activeMode || working;
   $('count').disabled = working || !!pending;
   $('duplicates').disabled = working || !!pending;
   $('scenario').disabled = working || !!pending;
@@ -57,10 +56,10 @@ async function verifyOwner() {
   controls();
   if (!activeMode) throw Error('Open load-test.html?mode=test to use the test fixture.');
   const session = readSession(mode);
-  if (!session) throw Error('Sign in with the owner Google account for TEST mode first.');
+  if (!session) throw Error('Sign in with Google for TEST mode first.');
   if (!client) connect();
   const account = await client.call('auth');
-  if (account?.ok !== true || account.environment !== 'test' || account.email !== session.email) throw Error('The owner session did not confirm TEST mode.');
+  if (account?.ok !== true || account.environment !== 'test' || account.email !== session.email) throw Error('The session did not confirm TEST mode.');
   const result = await client.call('load');
   checkMetadata(result);
   const roster = result.roster;
@@ -282,15 +281,14 @@ async function run(action) {
     show(`${safeMessage(error)}${pending ? '\nThe pending operation keeps the same request ID. Use Retry to recover it; a fresh room is never opened automatically.' : ''}`,'error');
   } finally {working=false;controls();}
 }
-$('signin').addEventListener('click', () => {
+function googleCredential(credential) {
   if (working || !activeMode) return;
-  try {
+  void run(async()=>{
     if (!client) connect();
-    // Invoke synchronously from the click to allow the Google popup.
-    const signing = beginSignIn(cloudDefaults.admin,payload=>client.call('exchangeLogin',payload,{anonymous:true}),mode);
-    void run(async()=>{show('Complete Google sign-in, then return here…');await signing;await verifyOwner();show('TEST owner and fictional roster verified. Existing test registration preserved.','success');});
-  } catch(error) {show(safeMessage(error),'error');}
-});
+    saveSession(await client.call('googleLogin',{credential},{anonymous:true}),mode);
+    await verifyOwner();show('TEST sign-in and fictional roster verified. Existing test registration preserved.','success');
+  });
+}
 $('verify').addEventListener('click',()=>void run(async()=>{
   await verifyOwner(); const status=await client.call('bonusStatus');checkMetadata(status);
   show(`TEST spreadsheet verified. ${status.room ? `Existing ${status.room.open?'open':'closed'} test room has ${status.room.entrants.length} entries and was preserved.` : 'There is no current test registration.'}`,'success');
@@ -319,7 +317,8 @@ if (!activeMode) {
   show('Stopped. This dashboard works only at load-test.html?mode=test. No Google client was created.','error');controls();
 } else {
   loadPending();controls();
+  renderGoogleButton($('google-button'),googleClientId,googleCredential).catch(error=>show(safeMessage(error),'error'));
   if (pending) show('A previous TEST operation is pending. Sign in or verify, then explicitly retry its same request.');
-  else if (readSession(mode)) void run(async()=>{await verifyOwner();show('TEST owner and fictional roster verified. Existing test registration preserved.','success');});
+  else if (readSession(mode)) void run(async()=>{await verifyOwner();show('TEST sign-in and fictional roster verified. Existing test registration preserved.','success');});
   else show('Sign in with Google to verify the isolated test spreadsheet.');
 }

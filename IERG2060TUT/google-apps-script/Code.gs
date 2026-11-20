@@ -247,8 +247,8 @@ function rpc(action, payload, sessionToken) {
   if (action === 'exchangeLogin') return exchangeLogin_(payload);
   if (action === 'googleLogin') return googleLogin_(payload);
   const session = sessionToken === undefined ? {email:authenticate_(),groups:'*'} : authenticateSession_(sessionToken);
-  // TAs reach only their own groups; test data belongs to the owner.
-  if ((TEST_CONTEXT_ && session.groups !== '*') || (session.groups !== '*' && !session.groups.includes(GROUP_))) throw Error('This Google account cannot open this tutorial group.');
+  // TAs reach only their own groups; any assigned TA may also use the fictional test data.
+  if (session.groups !== '*' && !(TEST_CONTEXT_ ? session.groups.length : session.groups.includes(GROUP_))) throw Error('This Google account cannot open this tutorial group.');
   const email = session.email;
   if (Object.prototype.hasOwnProperty.call(payload, 'adminKey') || Object.prototype.hasOwnProperty.call(payload, 'email')) throw Error('Account credentials must not be supplied in a cloud request.');
   if (action === 'auth') return {ok:true,email:email,environment:TEST_CONTEXT_ ? 'test' : 'production',group:GROUP_,groups:TEST_CONTEXT_ ? [] : groupList_(session.groups)};
